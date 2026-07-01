@@ -1,0 +1,165 @@
+# Voice-to-Form Live — orchestration des services (architecture « sandwich » CPU).
+#
+# Chaque serveur est un composant Docker distinct :
+#   backend  (FastAPI)      · frontend (React/nginx) · db (Postgres) · redis
+#   stt      (faster-whisper WS, CPU) · piper (TTS HTTP, CPU) · ollama (agent + extraction LLM)
+#   proxy    (Caddy, TLS)   · migrate (Alembic, one-shot)
+#
+# Profils :
+#   dev            → pile minimale HORS-LIGNE : SPEECH_AGENT=stub, EXTRACTOR_BACKEND=null.
+#                    Aucun modèle, aucun GPU.   docker compose --profile dev up --build
+#   voice          → ajoute la vraie chaîne vocale CPU (stt + piper + ollama). À combiner
+#                    avec dev pour tester en local : docker compose --profile dev --profile voice up
+#   prod           → pile complète + reverse-proxy TLS (Caddy).
+#                    docker compose --profile prod up --build -d
+#
+# Tout est piloté par .env (jamais commité). Voir .env.example. La bascule stub↔sandwich
+# se fait via SPEECH_AGENT dans .env (pas via un profil).
+
+x-backend-base: &backend-base
+  build:
+    context: ./backend
+  env_file: [.env]
+  networks: [internal]
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------- Reverse proxy (TLS, routage)
+  proxy:
+    image: caddy:2-alpine
+    profiles: [prod]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      backend: { condition: service_healthy }
+      frontend: { condition: service_started }
+    networks: [internal]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Frontend React (portail Admin)
+  frontend:
+    build:
+      context: ./frontend
+    profiles: [dev, prod]
+    ports: ["5173:80"]          # dev : exposé directement ; prod : derrière le proxy
+    networks: [internal]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Migrations (one-shot, bloquant)
+  migrate:
+    <<: *backend-base
+    profiles: [dev, prod]
+    command: alembic upgrade head
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  # ---------------------------------------------------------------- Backend FastAPI
+  backend:
+    <<: *backend-base
+    profiles: [dev, prod]
+    ports: ["8000:8000"]
+    # NB : la dépendance à stt/piper/ollama est LAZY (appels réseau au fil du dialogue),
+    # pilotée par .env — on ne la déclare pas ici pour que le profil `dev` reste autonome.
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    command: uvicorn app.interface.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------- Base de données
+  db:
+    image: postgres:16-alpine
+    profiles: [dev, prod]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vtf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-voicetoform}
+    volumes: [pg_data:/var/lib/postgresql/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vtf}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Redis (jetons, pub/sub, rate-limit)
+  redis:
+    image: redis:7-alpine
+    profiles: [dev, prod]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- STT — reconnaissance vocale (faster-whisper, CPU)
+  # WS compatible WhisperLive sur :9090. Régler dans .env :
+  #   STT_BACKEND=whisperlive   WHISPERLIVE_URL=ws://stt:9090
+  stt:
+    build:
+      context: ./stt-server
+    profiles: [voice, prod]
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}   # large-v3 si CPU costaud
+    volumes: [whisper_models:/models]          # cache HF (modèle téléchargé 1×)
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost',9090),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s                        # 1er démarrage : téléchargement du modèle
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- TTS — synthèse vocale (Piper, CPU)
+  # HTTP sur :5000. Régler dans .env :  TTS_BACKEND=piper_http   PIPER_URL=http://piper:5000
+  piper:
+    build:
+      context: ./piper-server
+    profiles: [voice, prod]
+    environment:
+      PIPER_VOICE: ${PIPER_VOICE:-/voices/fr_FR-siwis-medium.onnx}
+    volumes: [./voices:/voices:ro]             # voix .onnx (hors image : ~63 Mo)
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Agent + extraction LLM (Ollama, CPU/GPU)
+  # Auto-hébergé (privacy santé : aucun envoi à un tiers). Régler dans .env :
+  #   AGENT_BACKEND=ollama   EXTRACTOR_BACKEND=ollama   OLLAMA_HOST=http://ollama:11434
+  # 1re fois : docker compose exec ollama ollama pull <modèle>
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [voice, prod]
+    volumes: [ollama_models:/root/.ollama]
+    networks: [internal]
+    restart: unless-stopped
+
+networks:
+  internal: {}
+
+volumes:
+  pg_data: {}
+  redis_data: {}
+  caddy_data: {}
+  whisper_models: {}
+  ollama_models: {}

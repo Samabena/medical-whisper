@@ -1,0 +1,30 @@
+# Secrets & config locale
+.env
+
+# Environnements virtuels
+venv/
+.venv/
+
+# Bases de données locales
+*.db
+*.db.bak*
+*.sqlite
+*.sqlite3
+
+# Caches Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Frontend (EPIC 9)
+node_modules/
+frontend/dist/
+
+# Modèles / voix lourds
+voices/
+
+# Divers
+fs_test.txt
+.DS_Store

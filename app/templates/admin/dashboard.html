@@ -1,0 +1,134 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Tableau de bord{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-end flex-wrap gap-2">
+    <div>
+        <h1>Tableau de bord</h1>
+        <p>Vue d'ensemble des comptes clients et de l'activité de l'API.</p>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNouveauCompte">
+        <i class="bi bi-plus-lg me-1"></i> Nouveau compte
+    </button>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="stat-card">
+                <div class="stat-icon indigo"><i class="bi bi-people-fill"></i></div>
+                <div>
+                    <div class="stat-value">{{ stats.nb_comptes }}</div>
+                    <div class="stat-label">Comptes clients</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="stat-card">
+                <div class="stat-icon green"><i class="bi bi-key-fill"></i></div>
+                <div>
+                    <div class="stat-value">{{ stats.nb_cles_actives }}</div>
+                    <div class="stat-label">Clés API actives</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="stat-card">
+                <div class="stat-icon sky"><i class="bi bi-activity"></i></div>
+                <div>
+                    <div class="stat-value">{{ stats.nb_appels }}</div>
+                    <div class="stat-label">Appels API au total</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-people me-2 text-muted"></i>Comptes clients</span>
+        <span class="text-muted fw-normal small">{{ comptes | length }} compte(s)</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th style="width:60px;">ID</th>
+                    <th>Nom</th>
+                    <th>Email de contact</th>
+                    <th>Créé le</th>
+                    <th>Statut</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in comptes %}
+                <tr>
+                    <td class="text-muted">#{{ c.id }}</td>
+                    <td class="fw-semibold">{{ c.nom }}</td>
+                    <td class="text-muted">{{ c.email_contact }}</td>
+                    <td class="text-muted">{{ c.date_creation | dt }}</td>
+                    <td>
+                        {% if c.actif %}
+                        <span class="badge-soft ok"><i class="bi bi-check-circle-fill me-1"></i>Actif</span>
+                        {% else %}
+                        <span class="badge-soft off"><i class="bi bi-slash-circle me-1"></i>Inactif</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a href="/admin/comptes/{{ c.id }}/cles" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-key me-1"></i>Clés API
+                        </a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-5">
+                        <i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>
+                        Aucun compte client pour le moment.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Modal nouveau compte -->
+<div class="modal fade" id="modalNouveauCompte" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content" style="border-radius:16px; border:none;">
+            <div class="modal-header border-0 pb-0">
+                <h5 class="modal-title fw-bold">Nouveau compte client</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">Créez un compte pour un nouvel établissement ou client B2B.</p>
+                <form id="formNouveauCompte" method="post" action="/admin/comptes">
+                    <div class="mb-3">
+                        <label class="form-label fw-medium">Nom de l'établissement</label>
+                        <input type="text" class="form-control" name="nom" id="inputNom"
+                               placeholder="Ex : Clinique du Parc" required>
+                    </div>
+                    <div class="mb-1">
+                        <label class="form-label fw-medium">Email de contact</label>
+                        <input type="email" class="form-control" name="email_contact" id="inputEmail"
+                               placeholder="contact@etablissement.fr" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer border-0">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Annuler</button>
+                <button type="submit" form="formNouveauCompte" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Créer le compte
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

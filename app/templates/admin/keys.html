@@ -1,0 +1,108 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Clés API — Compte #{{ compte_id }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-end flex-wrap gap-2">
+    <div>
+        <nav class="small mb-1">
+            <a href="/admin/" class="text-decoration-none text-muted"><i class="bi bi-arrow-left me-1"></i>Tableau de bord</a>
+        </nav>
+        <h1>Clés API · Compte #{{ compte_id }}</h1>
+        <p>Générez et révoquez les clés d'accès à l'API pour ce compte.</p>
+    </div>
+    <form method="post" action="/admin/comptes/{{ compte_id }}/cles">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i> Générer une clé
+        </button>
+    </form>
+</div>
+
+{% if nouvelle_cle %}
+<div class="card mb-4" style="border-color:#fcd34d; background:#fffbeb;">
+    <div class="card-body">
+        <div class="d-flex align-items-start gap-2 mb-2">
+            <i class="bi bi-exclamation-triangle-fill text-warning fs-5"></i>
+            <div>
+                <strong>Nouvelle clé créée — copiez-la maintenant.</strong>
+                <div class="text-muted small">Pour des raisons de sécurité, elle ne sera plus jamais affichée.</div>
+            </div>
+        </div>
+        <div class="input-group">
+            <input type="text" class="form-control font-monospace" id="nouvelleCle"
+                   value="{{ nouvelle_cle }}" readonly style="background:#fff;">
+            <button class="btn btn-outline-secondary" type="button" onclick="copierCle()">
+                <i class="bi bi-clipboard me-1"></i><span id="copyLabel">Copier</span>
+            </button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-key me-2 text-muted"></i>Clés du compte</span>
+        <span class="text-muted fw-normal small">{{ cles | length }} clé(s)</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th style="width:60px;">ID</th>
+                    <th>Label</th>
+                    <th>Empreinte</th>
+                    <th>Créée le</th>
+                    <th>Statut</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cle in cles %}
+                <tr>
+                    <td class="text-muted">#{{ cle.id }}</td>
+                    <td class="fw-semibold">{{ cle.label }}</td>
+                    <td><code>{{ cle.cle_hachee[:6] }}…{{ cle.cle_hachee[-4:] }}</code></td>
+                    <td class="text-muted">{{ cle.cree_a | dt }}</td>
+                    <td>
+                        {% if cle.actif %}
+                        <span class="badge-soft ok"><i class="bi bi-check-circle-fill me-1"></i>Active</span>
+                        {% else %}
+                        <span class="badge-soft off"><i class="bi bi-x-circle me-1"></i>Révoquée</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if cle.actif %}
+                        <form method="post" action="/admin/comptes/{{ compte_id }}/cles/{{ cle.id }}/revoquer"
+                              class="d-inline" onsubmit="return confirm('Révoquer définitivement cette clé ?');">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-slash-circle me-1"></i>Révoquer
+                            </button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-5">
+                        <i class="bi bi-key fs-3 d-block mb-2 opacity-50"></i>
+                        Aucune clé pour ce compte. Générez-en une pour commencer.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function copierCle() {
+    const input = document.getElementById('nouvelleCle');
+    navigator.clipboard.writeText(input.value).then(() => {
+        document.getElementById('copyLabel').textContent = 'Copié !';
+        setTimeout(() => { document.getElementById('copyLabel').textContent = 'Copier'; }, 2000);
+    });
+}
+</script>
+{% endblock %}
