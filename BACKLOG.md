@@ -81,9 +81,8 @@ voice-to-form/
 │   └── app/
 │       ├── domain/              # entities, value_objects, errors
 │       ├── application/         # ports/ + cas d'usage (accounts, forms, integration, live)
-│       ├── infrastructure/      # db, stt (whisperlive+stub), tts (piper), llm (agent/extracteur), security, cache
+│       ├── infrastructure/      # db, stt (whisperlive→serveur en ligne + stub), tts (piper), llm (agent/extracteur), security, cache
 │       └── interface/           # api/ (admin, integration), ws/ (live), deps, main
-├── stt-server/                  # WhisperLive (conteneur) + config FR/hotwords
 ├── frontend/                    # React + TS + Vite (portail Admin + console test live)
 │   └── src/{api,components,pages,features}
 └── sdk/                         # SDK client (TS + Python) + exemples d'intégration
@@ -125,8 +124,8 @@ voice-to-form/
 **Acceptation :** secret manquant → erreur claire au boot.
 
 ### CORE-0.3 — docker-compose dev/prod
-**Tâches :** services `backend, frontend, db, redis, stt-server (WhisperLive), proxy` ; profils `dev` (STT CPU `small`/stub) / `prod` (STT GPU `large-v3`) ; healthchecks ; service `migrate` one-shot.
-**Acceptation :** `docker compose --profile dev up` démarre back+front+db+redis+stt ; `/health` vert.
+**Tâches :** services `backend, frontend, db, redis, piper, proxy` ; profils `dev` (STT stub) / `voice`+`prod` (STT = WhisperLive en ligne, LLM = Ollama Cloud) ; healthchecks ; service `migrate` one-shot.
+**Acceptation :** `docker compose --profile dev up` démarre back+front+db+redis ; `/health` vert.
 
 ---
 
@@ -224,7 +223,7 @@ voice-to-form/
 
 ### VOX-6.1 — Port `SttStreamPort` + adapter WhisperLive
 **But :** STT streaming abstrait, implémenté par WhisperLive.
-**Tâches :** port `open(language, hotwords)`, `send_audio(frame)`, `receive() -> {partial|final|endpoint, text, stable?, words[conf]}`, `close()`. Adapter client WebSocket vers le serveur WhisperLive (`stt-server`), mapping des segments (partiels/finaux + `probability` par mot). Config `language=fr`, `hotwords` du formulaire. **Latence (LIVE-7.4) :** activer le **VAD/endpointing** (`vad_silence_ms`, `vad_min_chunk_ms`) et émettre un événement **`endpoint`** (fin de parole) + un drapeau **`stable`** sur les partiels fiables (`partial_confidence_min`), distincts du final. **Garder `large-v3`** (précision médicale, pas de turbo/distil).
+**Tâches :** port `open(language, hotwords)`, `send_audio(frame)`, `receive() -> {partial|final|endpoint, text, stable?, words[conf]}`, `close()`. Adapter client WebSocket vers le serveur WhisperLive en ligne de l'équipe (`ws://srv-team-ia:9300`), mapping des segments (partiels/finaux + `probability` par mot). Config `language=fr`, `hotwords` du formulaire. **Latence (LIVE-7.4) :** activer le **VAD/endpointing** (`vad_silence_ms`, `vad_min_chunk_ms`) et émettre un événement **`endpoint`** (fin de parole) + un drapeau **`stable`** sur les partiels fiables (`partial_confidence_min`), distincts du final. **Garder `large-v3`** (précision médicale, pas de turbo/distil).
 **Acceptation :** un flux audio FR produit partiels (dont stables) + un `endpoint` puis le final, avec confiances.
 **Test :** `integration` contre WhisperLive (skippé sans serveur) ; unit avec faux flux.
 
@@ -327,8 +326,8 @@ voice-to-form/
 # EPIC 11 — Déploiement, GPU prod & DX
 
 ### DEP-11.1 — Profil prod + GPU
-**Tâches :** `stt-server` WhisperLive en **large-v3 GPU** (réservation GPU) ; `proxy` Caddy (TLS, validation Origin WS) ; secrets prod.
-**Acceptation :** `docker compose --profile prod up` sert en TLS, STT GPU large-v3.
+**Tâches :** STT = serveur WhisperLive **en ligne de l'équipe** (`ws://srv-team-ia:9300`, large-v3) ; `proxy` Caddy (TLS, validation Origin WS) ; secrets prod.
+**Acceptation :** `docker compose --profile prod up` sert en TLS, STT via le serveur en ligne.
 
 ### DEP-11.2 — Runbook & DX
 **Tâches :** README exploitation (dev CPU/stub vs prod GPU), migration, sauvegarde DB, rotation secrets, checklist d'intégration cliente.

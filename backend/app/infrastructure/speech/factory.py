@@ -2,8 +2,7 @@
 
 C'est le point unique où l'on choisit l'implémentation : tout le reste de l'app ne
 manipule que le port `SpeechAgentPort`. Architecture cible v3 = **sandwich**
-(`SPEECH_AGENT=sandwich`, composant STT + agent LLM + TTS). `personaplex` est l'héritage
-v2 (S2S, déprécié).
+(`SPEECH_AGENT=sandwich`, composant STT + agent LLM + TTS).
 """
 
 from __future__ import annotations
@@ -42,11 +41,6 @@ def _build_sandwich(settings: Settings) -> SpeechAgentPort:
 def build_speech_agent(settings: Settings) -> SpeechAgentPort:
     if settings.speech_agent == "sandwich":
         return _build_sandwich(settings)
-
-    if settings.speech_agent == "personaplex":
-        from app.infrastructure.speech.personaplex_client import PersonaPlexClient
-
-        return PersonaPlexClient(settings.model_ws_url)
 
     if settings.speech_agent == "llm":
         from app.infrastructure.speech.llm_agent import LlmSpeechAgent

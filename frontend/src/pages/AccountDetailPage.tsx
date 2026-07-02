@@ -76,7 +76,7 @@ export function AccountDetailPage() {
                 <option value="en">English</option>
               </select>
             </Field>
-            <Field label="Référence de voix" hint="Identifiant de l'échantillon vocal PersonaPlex.">
+            <Field label="Référence de voix" hint="Identifiant de la voix de synthèse (Piper).">
               <input className="input" defaultValue={account.voice_prompt} placeholder="voix-fr-medium" onBlur={(e) => e.target.value !== account.voice_prompt && save({ voice_prompt: e.target.value }, "Voix")} />
             </Field>
           </div>

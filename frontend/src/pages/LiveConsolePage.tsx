@@ -107,7 +107,7 @@ export function LiveConsolePage() {
             )}
           </div>
           <p className="subtle mt-2">
-            Mode démo (sans GPU) : la reconnaissance vocale réelle nécessite le modèle PersonaPlex.
+            Mode démo texte : la reconnaissance vocale réelle passe par le serveur STT en ligne de l'équipe.
             Ici, <strong>tape ce que dirait le médecin</strong> dans le champ de conversation pour remplir le formulaire.
           </p>
         </div>

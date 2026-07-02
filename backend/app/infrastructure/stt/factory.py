@@ -20,15 +20,6 @@ def build_stt_stream(settings: Settings) -> SttStreamPort:
             input_rate=settings.audio_input_rate,
         )
 
-    if settings.stt_backend == "whisperlive_remote":
-        from app.infrastructure.stt.whisperlive_remote import WhisperLiveRemoteStream
-
-        return WhisperLiveRemoteStream(
-            url=settings.whisperlive_remote_url,
-            input_rate=settings.audio_input_rate,
-            audio_format=settings.whisperlive_remote_audio_format,
-        )
-
     from app.infrastructure.stt.stub import StubSttStream
 
     return StubSttStream()

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
 
     ollama_api_key: str
-    ollama_model: str = "gpt-oss:120b"
+    ollama_model: str = "gpt-oss:120b-cloud"
     ollama_base_url: str = "https://ollama.com"
 
     # STT distant (serveur Whisper de l'équipe, API OpenAI-compatible).

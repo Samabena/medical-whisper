@@ -90,13 +90,10 @@ class WhisperLiveSession:
         return converted
 
     async def _lire(self) -> None:
-        logger.info("[DIAG-STT] reader démarré (audio_format=%s)", self.audio_format)  # DIAG TEMP
         try:
             async for raw in self.ws:  # type: ignore[attr-defined]
                 if isinstance(raw, bytes):
-                    logger.info("[DIAG-STT] reçu binaire %d octets", len(raw))  # DIAG TEMP
-                    continue
-                logger.info("[DIAG-STT] reçu texte: %s", str(raw)[:400])  # DIAG TEMP
+                    continue  # trames binaires (audio écho) ignorées
                 try:
                     msg = json.loads(raw)
                 except ValueError:
@@ -106,9 +103,8 @@ class WhisperLiveSession:
                 for seg in msg.get("segments", []):
                     await self._emettre_segment(seg)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[DIAG-STT] lecture interrompue : %r", exc)  # DIAG TEMP (était debug)
+            logger.debug("Lecture WhisperLive interrompue : %r", exc)
         finally:
-            logger.info("[DIAG-STT] reader terminé")  # DIAG TEMP
             await self._queue.put(None)
 
     async def _emettre_segment(self, seg: dict) -> None:
@@ -132,9 +128,6 @@ class WhisperLiveSession:
         frame = self._to_16k_s16le(frame)
         if self.audio_format == "float32":
             frame = _pcm16_to_float32_bytes(frame)  # WhisperLive standard
-        self._sent = getattr(self, "_sent", 0) + 1  # DIAG TEMP
-        if self._sent % 50 == 1:  # DIAG TEMP : 1re, 51e, 101e… trame
-            logger.info("[DIAG-STT] envoyé %d trames (dernière=%d octets, fmt=%s)", self._sent, len(frame), self.audio_format)
         await self.ws.send(frame)  # type: ignore[attr-defined]  # sinon PCM s16le brut
 
     async def end_turn(self) -> None:

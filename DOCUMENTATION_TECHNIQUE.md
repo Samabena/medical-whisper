@@ -34,15 +34,13 @@ Le cœur temps réel décompose la parole en trois maillons remplaçables :
                           └─────────────────────┘
 ```
 
-- **STT** : `stt-server/` — serveur WebSocket compatible WhisperLive basé sur **faster-whisper**
-  (CPU, endpointing par énergie/silence, anti-hallucination, prompt de domaine médical).
+- **STT** : serveur WebSocket **WhisperLive en ligne de l'équipe** (`ws://srv-team-ia:9300`),
+  basé sur faster-whisper (handshake JSON + audio float32, prompt de domaine médical). Le backend
+  s'y connecte via l'adaptateur `whisperlive` ; aucun serveur STT local dans la stack.
 - **Agent** : réponse conversationnelle courte (1–2 phrases) générée en streaming par **Ollama**.
 - **TTS** : `piper-server/` — serveur HTTP encapsulant **Piper** (voix FR `fr_FR-siwis-medium`).
 - **Extracteur** : lit le transcript et remplit le formulaire via **Ollama** en sorties structurées
   (JSON schema), en fusionnant sans écraser les champs déjà « confiants ».
-
-> Le mode historique `SPEECH_AGENT=personaplex` (v2, speech-to-speech GPU) est **déprécié** :
-> l'adapter subsiste dans le code mais la cible de déploiement est le sandwich CPU.
 
 ### Stack technique
 | Domaine | Technologie |
@@ -53,7 +51,7 @@ Le cœur temps réel décompose la parole en trois maillons remplaçables :
 | Frontend admin | React + TypeScript (Vite) → nginx |
 | STT | faster-whisper (CPU) via WebSocket type WhisperLive |
 | TTS | Piper (CPU) via serveur HTTP dédié |
-| Agent + extraction | Ollama (auto-hébergé, privacy santé) |
+| Agent + extraction | Ollama Cloud (`https://ollama.com`, clé API) |
 | Reverse-proxy / TLS | Caddy |
 | Orchestration | Docker Compose (profils dev / voice / prod) |
 
@@ -99,35 +97,37 @@ Chaque serveur est un **composant Docker distinct**, orchestré par `docker-comp
 | `db` | `postgres:16-alpine` | interne | dev, prod | Métadonnées (comptes, clés, formulaires, usage) |
 | `redis` | `redis:7-alpine` | interne | dev, prod | Jetons / pub-sub / rate-limit |
 | `migrate` | `./backend` (one-shot) | — | dev, prod | `alembic upgrade head` (bloquant avant backend) |
-| `stt` | `./stt-server/Dockerfile` | 9090 | voice, prod | STT faster-whisper (WS type WhisperLive) |
 | `piper` | `./piper-server/Dockerfile` | 5000 | voice, prod | TTS Piper (HTTP) |
-| `ollama` | `ollama/ollama:latest` | interne | voice, prod | Agent + extraction LLM (auto-hébergé) |
 | `proxy` | `caddy:2-alpine` | 80/443 | prod | Reverse-proxy + TLS automatique |
+
+> Agent + extraction LLM = **Ollama Cloud** (`OLLAMA_HOST=https://ollama.com` + `OLLAMA_API_KEY`) : pas de service `ollama` dans la stack.
 
 ### 3.1 Profils Compose
 - **`dev`** — pile minimale hors-ligne (`backend`+`db`+`redis`+`frontend`+`migrate`) avec
   `SPEECH_AGENT=stub`. Aucun modèle, aucun GPU. `docker compose --profile dev up --build`.
-- **`voice`** — ajoute la vraie chaîne vocale CPU (`stt`+`piper`+`ollama`). Se combine avec `dev`
-  pour tester en local : `docker compose --profile dev --profile voice up`.
+- **`voice`** — ajoute le TTS local `piper`. Se combine avec `dev`
+  pour tester en local : `docker compose --profile dev --profile voice up`. Le STT (serveur en
+  ligne `ws://srv-team-ia:9300`) et le LLM (Ollama Cloud) sont des services externes, pas locaux.
 - **`prod`** — pile complète + `proxy` TLS. `docker compose --profile prod up --build -d`.
 
 > La bascule stub ↔ sandwich se fait par **`SPEECH_AGENT` dans `.env`**, pas par un profil.
-> Le backend appelle `stt`/`piper`/`ollama` **paresseusement** (au fil du dialogue) : le profil
-> `dev` reste donc autonome sans ces services.
+> Le backend appelle `piper`, le STT en ligne et Ollama Cloud **paresseusement** (au fil du
+> dialogue) : le profil `dev` reste donc autonome sans ces services.
 
 ### 3.2 Backends interchangeables (pilotés par `.env`)
 | Maillon | Var | Valeurs |
 |---------|-----|---------|
-| Agent vocal | `SPEECH_AGENT` | `stub` (dev) · `sandwich` (prod) · `llm` (texte seul) · `personaplex` (déprécié) |
-| STT | `STT_BACKEND` | `stub` · `whisperlive` (→ `stt:9090`) · `whisperlive_remote` (serveur équipe) |
+| Agent vocal | `SPEECH_AGENT` | `stub` (dev) · `sandwich` (prod) · `llm` (texte seul) |
+| STT | `STT_BACKEND` | `stub` · `whisperlive` (→ serveur en ligne `ws://srv-team-ia:9300`) |
 | TTS | `TTS_BACKEND` | `stub` · `piper_http` (→ `piper:5000`, recommandé) · `piper` (binaire local) |
 | Agent LLM | `AGENT_BACKEND` | `scripted` (dev) · `ollama` (streaming) |
 | Extraction | `EXTRACTOR_BACKEND` | `null` (dev) · `keyword` · `ollama` |
 
-**Le serveur STT** (`stt-server/server.py`) : à la connexion le client envoie une config JSON,
-le serveur répond `SERVER_READY`, puis reçoit de l'audio **float32 16 kHz**, applique un VAD par
-énergie (RMS) + silence, transcrit par lots (worker unique, files fusionnées pour rattraper le
-retard), filtre les hallucinations de sous-titres, et émet des segments `{text, completed, words}`.
+**Le serveur STT** (WhisperLive en ligne de l'équipe, `ws://srv-team-ia:9300`) : à la connexion le
+client envoie une config JSON, le serveur répond `SERVER_READY`, puis reçoit de l'audio
+**float32 16 kHz**, applique un VAD par énergie (RMS) + silence, transcrit par lots, filtre les
+hallucinations de sous-titres, et émet des segments `{text, completed, words}`. Côté backend,
+l'adaptateur `whisperlive` (`app/infrastructure/stt/whisperlive.py`) parle ce protocole.
 
 **Le serveur Piper** (`piper-server/server.py`) : `POST /synthesize {text, voice}` → `audio/wav`.
 La voix `.onnx` (~63 Mo) est fournie par **volume** (`./voices:/voices:ro`) et non baked dans
@@ -250,7 +250,7 @@ Copier `.env.example` → `.env`. Voir aussi `backend/.env.example`.
 | `REDIS_URL` | `redis://redis:6379/0` | Redis |
 | `SPEECH_AGENT` | `stub` | Agent vocal (voir §3.2) |
 | `STT_BACKEND` | `stub` | Backend STT |
-| `WHISPERLIVE_URL` | `ws://stt-server:9090` | Serveur STT (mettre `ws://stt:9090` en Docker) |
+| `WHISPERLIVE_URL` | `ws://srv-team-ia:9300` | Serveur STT WhisperLive en ligne de l'équipe |
 | `WHISPER_MODEL` | `small` | Modèle Whisper (`large-v3` si CPU costaud) |
 | `STT_LANGUAGE` | `""` | Vide ⇒ langue du compte/formulaire |
 | `AUDIO_INPUT_RATE` | `24000` | Taux du micro (converti en 16 kHz côté STT) |
@@ -260,8 +260,8 @@ Copier `.env.example` → `.env`. Voir aussi `backend/.env.example`.
 | `PIPER_BINARY` | `piper` | Exécutable Piper (backend `piper` local) |
 | `AGENT_BACKEND` | `scripted` | `ollama` en prod |
 | `EXTRACTOR_BACKEND` | `null` | `ollama` en prod |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama (`http://ollama:11434` en Docker) |
-| `OLLAMA_MODEL` | `llama3.1` | Modèle agent/extracteur par défaut |
+| `OLLAMA_HOST` | `https://ollama.com` | Ollama Cloud (nécessite `OLLAMA_API_KEY`) |
+| `OLLAMA_MODEL` | `gpt-oss:120b-cloud` | Modèle agent/extracteur par défaut |
 | `LLM_AGENT_MODEL` / `LLM_EXTRACTOR_MODEL` | `""` | Modèles distincts (vide ⇒ `OLLAMA_MODEL`) |
 | `JWT_SECRET` | **(obligatoire, ≥32)** | Signature des jetons |
 | `ADMIN_EMAIL` | `admin@local` | Compte admin |
@@ -303,7 +303,9 @@ Copier `.env.example` → `.env`. Voir aussi `backend/.env.example`.
 - **Aucune persistance** d'audio ni de transcript. La base ne stocke que des **métadonnées**
   (comptes, clés, formulaires, usage).
 - Le **formulaire final** est gardé en mémoire à TTL court (`RESULT_RETENTION_SECONDS`) puis purgé.
-- **Ollama et Piper auto-hébergés** : aucun contenu clinique envoyé à un tiers.
+- **Piper (TTS) auto-hébergé.** ⚠️ **Ollama Cloud** (agent + extraction) est un **service tiers** :
+  le transcript envoyé pour l'extraction transite par `ollama.com`. À arbitrer pour les données de
+  santé (revenir à un Ollama auto-hébergé si aucun envoi tiers n'est acceptable).
 - **Logs JSON sans contenu clinique** ; `/metrics` = agrégats uniquement (test d'audit garde-fou).
 
 ---
@@ -339,7 +341,6 @@ voice-to-form/
 │  ├─ tests/                # pytest
 │  └─ Dockerfile
 ├─ frontend/                # Admin React + TS (Vite) → nginx  (Dockerfile)
-├─ stt-server/              # STT faster-whisper (WS)          (Dockerfile)
 ├─ piper-server/            # TTS Piper (HTTP)                 (Dockerfile)
 ├─ sdk/                     # SDK Python + TypeScript + doc intégration
 ├─ infra/Caddyfile          # reverse-proxy TLS (prod)

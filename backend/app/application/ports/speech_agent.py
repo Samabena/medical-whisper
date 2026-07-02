@@ -1,6 +1,6 @@
 """Port de l'agent vocal full-duplex (MODEL-6.1).
 
-Abstraction du modèle speech-to-speech (PersonaPlex en prod, stub en dev). Les cas
+Abstraction de l'agent vocal (sandwich STT+agent+TTS en prod, stub en dev). Les cas
 d'usage `live` dépendent de cette interface, jamais de l'implémentation concrète (DIP).
 
 Contrat full-duplex : on **envoie** des trames audio utilisateur en continu et on
@@ -15,8 +15,8 @@ from typing import AsyncIterator, Literal, Protocol, runtime_checkable
 
 from app.domain.value_objects import Language
 
-# Format audio d'échange (PersonaPlex : 24 kHz mono). L'adapter gère le codec réel
-# (Opus sur le fil) ; le port raisonne en trames d'octets.
+# Format audio d'échange (24 kHz mono capté par le front). L'adapter gère le codec réel
+# et le rééchantillonnage vers le STT ; le port raisonne en trames d'octets.
 SAMPLE_RATE = 24_000
 CHANNELS = 1
 
@@ -110,7 +110,7 @@ class TextDrivenSession(Protocol):
 
     L'orchestrateur détecte cette capacité (isinstance) pour transmettre les répliques
     tapées (`user_text`) à l'agent afin qu'il génère une réponse conversationnelle. Les
-    agents pilotés par l'audio (PersonaPlex, stub) ne l'implémentent pas.
+    agents pilotés par l'audio (stub) ne l'implémentent pas.
     """
 
     async def send_user_text(self, text: str) -> None:
@@ -122,7 +122,7 @@ class SpeechAgentPort(Protocol):
     """Fabrique de sessions de dialogue, conditionnée par la persona/voix/langue.
 
     `hotwords` (optionnel) = lexique du formulaire transmis au STT pour biaiser la
-    reconnaissance (FORM-4.2). Les agents sans STT (PersonaPlex S2S, stub) l'ignorent.
+    reconnaissance (FORM-4.2). Les agents sans STT (stub) l'ignorent.
     """
 
     async def open(

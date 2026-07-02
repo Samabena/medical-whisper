@@ -15,7 +15,7 @@ import pytest
 def _mock_settings(
     api_key: str = "cle-test",
     base_url: str = "https://ollama.com",
-    model: str = "gpt-oss:120b",
+    model: str = "gpt-oss:120b-cloud",
 ) -> MagicMock:
     """Crée un objet Settings factice."""
     s = MagicMock()
@@ -47,7 +47,7 @@ def test_get_llm_parametres_corrects() -> None:
 
     mock_cls.assert_called_once_with(
         base_url="https://ollama.com",
-        model="gpt-oss:120b",
+        model="gpt-oss:120b-cloud",
         temperature=0.7,
         client_kwargs={"headers": {"Authorization": "Bearer cle-test"}},
     )

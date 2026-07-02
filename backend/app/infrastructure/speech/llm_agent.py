@@ -1,8 +1,8 @@
 """Agent vocal conversationnel piloté par un LLM texte — DEV, sans GPU (MODEL-6.4).
 
-Substitut local de PersonaPlex pour tester la *qualité du dialogue* et le rendu sans
-GPU : au lieu d'un modèle speech-to-speech, on fait converser un LLM texte (Ollama,
-local ou cloud) selon la persona du formulaire. L'utilisateur tape ses répliques
+Mode texte pour tester la *qualité du dialogue* et le rendu sans STT/TTS : on fait
+converser un LLM texte (Ollama, local ou cloud) selon la persona du formulaire.
+L'utilisateur tape ses répliques
 (message `user_text`) ; l'agent répond une question à la fois, dans la langue du compte.
 
 Contrairement au `StubSpeechAgent` (réponses scriptées figées), les réponses sont

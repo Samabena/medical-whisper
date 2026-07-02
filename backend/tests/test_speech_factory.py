@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.infrastructure.config import Settings
 from app.infrastructure.speech.factory import build_speech_agent
 from app.infrastructure.speech.llm_agent import LlmSpeechAgent
-from app.infrastructure.speech.personaplex_client import PersonaPlexClient
 from app.infrastructure.speech.sandwich import SandwichSpeechAgent
 from app.infrastructure.speech.stub_agent import StubSpeechAgent
 from app.infrastructure.stt.stub import StubSttStream
@@ -36,24 +35,6 @@ def test_sandwich_bascule_whisperlive_et_piper():
     assert isinstance(agent, SandwichSpeechAgent)
     assert type(agent.stt_stream).__name__ == "WhisperLiveStream"
     assert type(agent.tts).__name__ == "PiperTts"
-
-
-def test_sandwich_bascule_whisperlive_remote():
-    s = Settings(
-        _env_file=None, jwt_secret="x" * 32, admin_password="y",
-        speech_agent="sandwich", stt_backend="whisperlive_remote",
-        whisperlive_remote_url="ws://srv-team-ia:9300/v1/audio/live",
-    )
-    agent = build_speech_agent(s)
-    assert isinstance(agent, SandwichSpeechAgent)
-    assert type(agent.stt_stream).__name__ == "WhisperLiveRemoteStream"
-    assert agent.stt_stream.url == "ws://srv-team-ia:9300/v1/audio/live"
-    assert agent.stt_stream.audio_format == "pcm_s16le"
-
-
-def test_personaplex_si_configure():
-    s = Settings(_env_file=None, jwt_secret="x" * 32, admin_password="y", speech_agent="personaplex")
-    assert isinstance(build_speech_agent(s), PersonaPlexClient)
 
 
 def test_llm_si_configure():

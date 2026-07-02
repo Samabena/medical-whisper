@@ -2,13 +2,16 @@
 #
 # Chaque serveur est un composant Docker distinct :
 #   backend  (FastAPI)      · frontend (React/nginx) · db (Postgres) · redis
-#   stt      (faster-whisper WS, CPU) · piper (TTS HTTP, CPU) · ollama (agent + extraction LLM)
+#   piper    (TTS HTTP, CPU)
 #   proxy    (Caddy, TLS)   · migrate (Alembic, one-shot)
+# Le STT est fourni par le serveur en ligne de l'équipe (ws://srv-team-ia:9300) via
+# STT_BACKEND=whisperlive. L'agent + l'extraction LLM passent par Ollama Cloud
+# (OLLAMA_HOST=https://ollama.com + OLLAMA_API_KEY) — plus de service STT ni Ollama local.
 #
 # Profils :
 #   dev            → pile minimale HORS-LIGNE : SPEECH_AGENT=stub, EXTRACTOR_BACKEND=null.
 #                    Aucun modèle, aucun GPU.   docker compose --profile dev up --build
-#   voice          → ajoute la vraie chaîne vocale CPU (stt + piper + ollama). À combiner
+#   voice          → ajoute le TTS local Piper (STT + LLM = services en ligne). À combiner
 #                    avec dev pour tester en local : docker compose --profile dev --profile voice up
 #   prod           → pile complète + reverse-proxy TLS (Caddy).
 #                    docker compose --profile prod up --build -d
@@ -107,25 +110,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- STT — reconnaissance vocale (faster-whisper, CPU)
-  # WS compatible WhisperLive sur :9090. Régler dans .env :
-  #   STT_BACKEND=whisperlive   WHISPERLIVE_URL=ws://stt:9090
-  stt:
-    build:
-      context: ./stt-server
-    profiles: [voice, prod]
-    environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}   # large-v3 si CPU costaud
-    volumes: [whisper_models:/models]          # cache HF (modèle téléchargé 1×)
-    networks: [internal]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost',9090),2).close()"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s                        # 1er démarrage : téléchargement du modèle
-    restart: unless-stopped
-
   # ---------------------------------------------------------------- TTS — synthèse vocale (Piper, CPU)
   # HTTP sur :5000. Régler dans .env :  TTS_BACKEND=piper_http   PIPER_URL=http://piper:5000
   piper:
@@ -143,16 +127,9 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- Agent + extraction LLM (Ollama, CPU/GPU)
-  # Auto-hébergé (privacy santé : aucun envoi à un tiers). Régler dans .env :
-  #   AGENT_BACKEND=ollama   EXTRACTOR_BACKEND=ollama   OLLAMA_HOST=http://ollama:11434
-  # 1re fois : docker compose exec ollama ollama pull <modèle>
-  ollama:
-    image: ollama/ollama:latest
-    profiles: [voice, prod]
-    volumes: [ollama_models:/root/.ollama]
-    networks: [internal]
-    restart: unless-stopped
+  # Agent + extraction LLM : Ollama Cloud (pas de service local). Régler dans .env :
+  #   AGENT_BACKEND=ollama   EXTRACTOR_BACKEND=ollama
+  #   OLLAMA_HOST=https://ollama.com   OLLAMA_API_KEY=<clé>
 
 networks:
   internal: {}
@@ -161,5 +138,3 @@ volumes:
   pg_data: {}
   redis_data: {}
   caddy_data: {}
-  whisper_models: {}
-  ollama_models: {}

@@ -47,7 +47,7 @@ et une **séparation nette conversation / extraction**.
 │                 *Repo · EphemeralTokenPort                                    │
 │                                                                              │
 │  infrastructure/                                                             │
-│    stt/         WhisperLiveAdapter ──WS──▶ [stt-server: WhisperLive GPU]     │
+│    stt/         WhisperLiveAdapter ──WS──▶ [srv-team-ia:9300 : WhisperLive]  │
 │                 StubSttAdapter (dev)                                          │
 │    tts/         PiperAdapter (local, voix FR)                                 │
 │    llm/         AgentLlm (rapide) · ExtractorLlm (précis, structuré)         │
@@ -270,14 +270,14 @@ UsageRecord(id, account_id, session_id, nb_tours, durée_audio_s, créé_le)    
 
 | | **dev** | **prod** |
 |---|---------|----------|
-| STT | stub **ou** WhisperLive CPU (`small`) | WhisperLive **GPU** (`large-v3`) |
-| GPU | non requis | requis (STT) |
+| STT | stub **ou** WhisperLive en ligne | WhisperLive en ligne (`srv-team-ia:9300`) |
+| GPU | non requis (STT distant) | non requis côté app (STT distant) |
 | TTS | Piper (local) | Piper (local) |
 | LLM | Ollama Cloud (ou mocké en test) | Ollama Cloud / fournisseur |
 | TLS | non (http local) | oui (Caddy, WSS) |
 | Lancement | `docker compose --profile dev up` | `docker compose --profile prod up` |
 
-Bascule prod = `STT_BACKEND=whisperlive` + service STT GPU. Le reste du code est identique
+Bascule prod = `STT_BACKEND=whisperlive` + `WHISPERLIVE_URL` du serveur en ligne. Le reste du code est identique
 (grâce aux ports), ce qui rend la démo dev fidèle au comportement prod, à la latence près.
 
 ---

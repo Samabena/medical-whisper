@@ -104,7 +104,7 @@ export async function startLive(
   ws.onclose = () => handlers.onClose?.();
   ws.onerror = () => handlers.onError?.("Erreur WebSocket");
 
-  // Capture micro → PCM16 24 kHz.
+  // Capture micro → PCM16 16 kHz (rééchantillonné ci-dessous ; taux STT attendu).
   let ctx: AudioContext | null = null;
   let stream: MediaStream | null = null;
   let processor: ScriptProcessorNode | null = null;

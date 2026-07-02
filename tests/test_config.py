@@ -14,7 +14,7 @@ def test_settings_valeurs_par_defaut(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.ollama_api_key == "cle-de-test"
-    assert settings.ollama_model == "gpt-oss:120b"
+    assert settings.ollama_model == "gpt-oss:120b-cloud"
     assert settings.ollama_base_url == "https://ollama.com"
     assert settings.whisper_api_url == "http://srv-team-ia:9300/v1/audio/transcriptions"
     assert settings.whisper_api_timeout == 120

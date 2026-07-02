@@ -142,7 +142,7 @@ async def main() -> None:
     print(f"  Formulaires: {FORM_ID} (Consultation médicale)")
     print(f"             : {FORM_ID_V1} (Consultation médicale complète)")
     print("  Console   : http://localhost:5173 → Console de test live")
-    print("  Admin     : admin@local / admin1234")
+    print("  Admin     : ADMIN_EMAIL / ADMIN_PASSWORD (voir .env ; défaut dev : admin@local / admin)")
     print("=======================================================\n")
 
 

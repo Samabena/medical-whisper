@@ -8,9 +8,11 @@ local, sans Docker ni GPU.
 
 ## Prérequis
 
-- **Ollama** installé et connecté (`ollama --version`, puis `ollama signin` pour les
-  modèles `:cloud`). Modèle utilisé par défaut : `gpt-oss:120b-cloud` (dialogue **et**
-  extraction). Vérifié OK ; `qwen3.5:cloud`/`cogito` nécessitent un abonnement / sont retirés.
+- **Ollama Cloud** : une clé API (`OLLAMA_API_KEY`) avec `OLLAMA_HOST=https://ollama.com`.
+  Modèle par défaut : `gpt-oss:120b-cloud` (dialogue **et** extraction). Vérifié OK ;
+  `qwen3.5:cloud`/`cogito` nécessitent un abonnement / sont retirés.
+  *Alternative :* un Ollama local (`ollama signin`) avec `OLLAMA_HOST=http://localhost:11434`
+  relaie aussi vers le cloud sans clé.
 - **Backend** : venv `backend/.venv` (déjà présent). **Front** : `frontend/` (Node 24).
 
 > 💡 **Reconstruire l'env backend** (déps figées). Toujours lancer pytest/uvicorn via
@@ -36,8 +38,9 @@ Tout est déjà dans `backend/.env` (créé pour ce mode) :
 DATABASE_URL=sqlite+aiosqlite:///./dev.db   # pas de Postgres requis
 SPEECH_AGENT=llm                            # agent conversationnel LLM
 EXTRACTOR_BACKEND=ollama                     # remplissage réel du formulaire
-OLLAMA_HOST=http://localhost:11434
+OLLAMA_HOST=https://ollama.com               # Ollama Cloud (clé API)
 OLLAMA_MODEL=gpt-oss:120b-cloud
+OLLAMA_API_KEY=<clé Ollama Cloud>
 ```
 
 ## Lancer (3 terminaux)
@@ -72,4 +75,5 @@ npm run dev        # http://localhost:5173
 ## Remettre en stub / prod
 
 - Dialogue scripté déterministe (offline total) : `SPEECH_AGENT=stub`, `EXTRACTOR_BACKEND=null`.
-- Prod GPU : `SPEECH_AGENT=personaplex` + `MODEL_WS_URL` du serveur PersonaPlex.
+- Vocal réel : `SPEECH_AGENT=sandwich`, `STT_BACKEND=whisperlive`,
+  `WHISPERLIVE_URL=ws://srv-team-ia:9300` (serveur STT en ligne de l'équipe).

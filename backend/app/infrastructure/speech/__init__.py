@@ -1,1 +1,1 @@
-"""Adapters de l'agent vocal : stub (dev) et PersonaPlex (prod)."""
+"""Adapters de l'agent vocal : stub (dev), sandwich (STT+agent+TTS) et llm (texte seul)."""

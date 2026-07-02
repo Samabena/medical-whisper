@@ -28,24 +28,18 @@ class Settings(BaseSettings):
     # sandwich    : v3, compose STT (stt_backend) + agent LLM + TTS (tts_backend).
     # stub        : agent vocal scripté, AUCUN GPU requis (dev).
     # llm         : agent conversationnel texte seul (Ollama), dev sans STT/TTS.
-    # personaplex : (DÉPRÉCIÉ — v2 S2S anglais-only) adapter WebSocket Moshi/PersonaPlex.
-    speech_agent: Literal["stub", "llm", "personaplex", "sandwich"] = "stub"
-    model_ws_url: str = "ws://model:8998/api/chat"  # (déprécié, v2 PersonaPlex)
+    speech_agent: Literal["stub", "llm", "sandwich"] = "stub"
 
     # --- STT : reconnaissance vocale streaming (v3) -----------------------
-    # stub               : transcripts scriptés déterministes (dev sans GPU).
-    # whisperlive        : client WebSocket vers un serveur WhisperLive collabora (float32).
-    # whisperlive_remote : endpoint WS live du serveur de l'équipe (réponses type WhisperLive,
-    #                      config par query string, audio PCM s16le brut).
-    stt_backend: Literal["stub", "whisperlive", "whisperlive_remote"] = "stub"
-    whisperlive_url: str = "ws://stt-server:9090"
-    # Serveur STT distant de l'équipe (mode live).
-    whisperlive_remote_url: str = "ws://srv-team-ia:9300/v1/audio/live"
-    whisperlive_remote_audio_format: Literal["pcm_s16le", "float32"] = "pcm_s16le"
-    whisper_model: str = "small"  # dev CPU ; large-v3 en prod GPU
+    # stub        : transcripts scriptés déterministes (dev sans GPU/réseau).
+    # whisperlive : client WebSocket vers le serveur WhisperLive en ligne de l'équipe
+    #               (handshake JSON + audio float32).
+    stt_backend: Literal["stub", "whisperlive"] = "stub"
+    whisperlive_url: str = "ws://srv-team-ia:9300"  # serveur STT en ligne de l'équipe
+    whisper_model: str = "small"  # transmis dans le handshake (small dev CPU ; large-v3 GPU)
     stt_language: Literal["en", "fr", ""] = ""  # vide ⇒ langue du compte/formulaire
-    # Taux d'échantillonnage de l'audio entrant (micro). Le front capture en 24 kHz
-    # (contrainte PersonaPlex S2S) ; WhisperLive attend du 16 kHz ⇒ rééchantillonnage.
+    # Taux d'échantillonnage de l'audio entrant (micro). Le front capture en 24 kHz ;
+    # WhisperLive attend du 16 kHz ⇒ rééchantillonnage si besoin.
     audio_input_rate: int = 24000
 
     # --- TTS : synthèse vocale (v3) ---------------------------------------
@@ -62,8 +56,8 @@ class Settings(BaseSettings):
     # keyword : extraction déterministe « champ: valeur » (dev/test, sans LLM).
     # ollama  : extraction NL réelle via Ollama (auto-hébergeable, données de santé).
     extractor_backend: Literal["null", "keyword", "ollama"] = "null"
-    ollama_host: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1"
+    ollama_host: str = "https://ollama.com"  # Ollama Cloud (clé API requise)
+    ollama_model: str = "gpt-oss:120b-cloud"
     ollama_api_key: str = ""
     # Modèles distincts agent (rapide) / extracteur (précis) — vide ⇒ `ollama_model`.
     llm_agent_model: str = ""
