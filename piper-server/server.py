@@ -54,8 +54,13 @@ def synthesize(text: str, voice: str) -> bytes:
             env=_PIPER_ENV,
         )
         if proc.returncode != 0:
-            err = (proc.stderr or b"").decode(errors="replace")[:200]
-            raise RuntimeError(f"Piper a échoué : {err}")
+            # stderr complet loggé côté serveur ; la vraie erreur est souvent EN FIN
+            # (après d'éventuels warnings onnxruntime) → on remonte la fin au client.
+            err = (proc.stderr or b"").decode(errors="replace").strip()
+            log.error("Piper returncode=%s\n%s", proc.returncode, err)
+            raise RuntimeError(f"Piper a échoué (code {proc.returncode}) : {err[-400:]}")
+        if not sortie.exists() or sortie.stat().st_size == 0:
+            raise RuntimeError("Piper n'a produit aucun WAV.")
         return sortie.read_bytes()
 
 

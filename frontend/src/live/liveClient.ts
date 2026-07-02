@@ -104,49 +104,73 @@ export async function startLive(
   ws.onclose = () => handlers.onClose?.();
   ws.onerror = () => handlers.onError?.("Erreur WebSocket");
 
-  // Capture micro → PCM16 16 kHz (rééchantillonné ci-dessous ; taux STT attendu).
+  // Capture micro → PCM16 16 kHz. getUserMedia n'existe qu'en **contexte sécurisé**
+  // (HTTPS ou http://localhost) : sur une origine HTTP non-localhost (réseau privé),
+  // `navigator.mediaDevices` est absent et le navigateur bloque le micro.
   let ctx: AudioContext | null = null;
   let stream: MediaStream | null = null;
   let processor: ScriptProcessorNode | null = null;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // IMPORTANT : beaucoup de navigateurs IGNORENT `sampleRate` et capturent au taux
-    // matériel (souvent 48 kHz). On lit donc le taux RÉEL (ctx.sampleRate) et on
-    // rééchantillonne nous-mêmes vers 16 kHz (attendu par le STT) — fiable partout.
-    ctx = new AudioContext();
-    const inRate = ctx.sampleRate;
-    const OUT_RATE = 16000;
-    const step = inRate / OUT_RATE;
-    const source = ctx.createMediaStreamSource(stream);
-    processor = ctx.createScriptProcessor(4096, 1, 1);
-    source.connect(processor);
-    processor.connect(ctx.destination);
-    let carry = new Float32Array(0); // échantillons restants entre deux blocs
-    let readPos = 0; // position de lecture fractionnaire conservée d'un bloc à l'autre
-    processor.onaudioprocess = (e) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      const cur = e.inputBuffer.getChannelData(0);
-      const data = new Float32Array(carry.length + cur.length);
-      data.set(carry, 0);
-      data.set(cur, carry.length);
-      const out: number[] = [];
-      let i = readPos;
-      for (; i + 1 < data.length; i += step) {
-        const i0 = i | 0;
-        const f = i - i0;
-        out.push(data[i0] * (1 - f) + data[i0 + 1] * f); // interpolation linéaire
-      }
-      const consumed = i | 0;
-      carry = data.slice(consumed);
-      readPos = i - consumed;
-      const buf = new Int16Array(out.length);
-      for (let k = 0; k < out.length; k++) {
-        buf[k] = Math.max(-1, Math.min(1, out[k])) * 0x7fff;
-      }
-      if (buf.length) ws.send(buf.buffer);
-    };
-  } catch {
-    handlers.onError?.("Micro indisponible (le test continue sans audio).");
+  const origine = typeof window !== "undefined" ? window.location.origin : "?";
+  const microDispo =
+    typeof window !== "undefined" &&
+    window.isSecureContext &&
+    !!navigator.mediaDevices?.getUserMedia;
+  if (!microDispo) {
+    handlers.onError?.(
+      `Micro bloqué : origine non sécurisée (${origine}). Le navigateur n'autorise le ` +
+        "micro qu'en HTTPS ou via http://localhost. Solutions : servir le site en HTTPS, " +
+        "y accéder par http://localhost (tunnel), ou autoriser cette origine dans " +
+        "chrome://flags/#unsafely-treat-insecure-origin-as-secure puis relancer le " +
+        "navigateur. Le test continue sans audio (saisie texte possible)."
+    );
+  } else {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // IMPORTANT : beaucoup de navigateurs IGNORENT `sampleRate` et capturent au taux
+      // matériel (souvent 48 kHz). On lit donc le taux RÉEL (ctx.sampleRate) et on
+      // rééchantillonne nous-mêmes vers 16 kHz (attendu par le STT) — fiable partout.
+      ctx = new AudioContext();
+      const inRate = ctx.sampleRate;
+      const OUT_RATE = 16000;
+      const step = inRate / OUT_RATE;
+      const source = ctx.createMediaStreamSource(stream);
+      processor = ctx.createScriptProcessor(4096, 1, 1);
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      let carry = new Float32Array(0); // échantillons restants entre deux blocs
+      let readPos = 0; // position de lecture fractionnaire conservée d'un bloc à l'autre
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const cur = e.inputBuffer.getChannelData(0);
+        const data = new Float32Array(carry.length + cur.length);
+        data.set(carry, 0);
+        data.set(cur, carry.length);
+        const out: number[] = [];
+        let i = readPos;
+        for (; i + 1 < data.length; i += step) {
+          const i0 = i | 0;
+          const f = i - i0;
+          out.push(data[i0] * (1 - f) + data[i0 + 1] * f); // interpolation linéaire
+        }
+        const consumed = i | 0;
+        carry = data.slice(consumed);
+        readPos = i - consumed;
+        const buf = new Int16Array(out.length);
+        for (let k = 0; k < out.length; k++) {
+          buf[k] = Math.max(-1, Math.min(1, out[k])) * 0x7fff;
+        }
+        if (buf.length) ws.send(buf.buffer);
+      };
+    } catch (err) {
+      const nom = (err as { name?: string } | null)?.name;
+      const detail =
+        nom === "NotAllowedError" || nom === "SecurityError"
+          ? "accès refusé — autorisez le micro pour ce site"
+          : nom === "NotFoundError" || nom === "OverconstrainedError"
+            ? "aucun micro détecté"
+            : (nom ?? "erreur inconnue");
+      handlers.onError?.(`Micro indisponible (${detail}). Le test continue sans audio.`);
+    }
   }
 
   const cleanup = () => {

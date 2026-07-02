@@ -23,7 +23,7 @@ node_modules/
 frontend/dist/
 
 # Modèles / voix lourds
-voices/
+#voices/
 
 # Divers
 fs_test.txt

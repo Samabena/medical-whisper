@@ -81,6 +81,18 @@ POSTGRES_PASSWORD=<secret>
 CORS_ORIGINS=["https://app-cliente.com"]
 ```
 
+### Provisionner la voix Piper (OBLIGATOIRE — `voices/` est gitignoré)
+Le modèle de voix `.onnx` n'est **pas** dans le dépôt : à déposer sur le serveur dans `voices/`
+avant de lancer, sinon Piper renvoie 500 (« Unable to find voice »).
+```bash
+cd voices
+curl -L -o fr_FR-siwis-medium.onnx \
+  "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx?download=true"
+curl -L -o fr_FR-siwis-medium.onnx.json \
+  "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json?download=true"
+cd ..
+```
+
 ### Lancer
 ```bash
 docker compose --profile prod up --build -d

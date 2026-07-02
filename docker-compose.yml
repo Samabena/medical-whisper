@@ -18,6 +18,9 @@
 #
 # Tout est piloté par .env (jamais commité). Voir .env.example. La bascule stub↔sandwich
 # se fait via SPEECH_AGENT dans .env (pas via un profil).
+#
+# Données persistantes : bind mounts vers /srv/poleia/data/medical-whisper/
+# Conforme aux conventions d'infrastructure du Pôle IA.
 
 x-backend-base: &backend-base
   build:
@@ -36,7 +39,7 @@ services:
       DOMAIN: ${DOMAIN:-localhost}
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
+      - /srv/poleia/data/medical-whisper/caddy:/data
     depends_on:
       backend: { condition: service_healthy }
       frontend: { condition: service_started }
@@ -48,7 +51,7 @@ services:
     build:
       context: ./frontend
     profiles: [dev, prod]
-    ports: ["5173:80"]          # dev : exposé directement ; prod : derrière le proxy
+    ports: ["5173:80"]
     networks: [internal]
     restart: unless-stopped
 
@@ -66,8 +69,6 @@ services:
     <<: *backend-base
     profiles: [dev, prod]
     ports: ["8000:8000"]
-    # NB : la dépendance à stt/piper/ollama est LAZY (appels réseau au fil du dialogue),
-    # pilotée par .env — on ne la déclare pas ici pour que le profil `dev` reste autonome.
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -87,7 +88,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-vtf}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-voicetoform}
-    volumes: [pg_data:/var/lib/postgresql/data]
+    volumes:
+      - /srv/poleia/data/medical-whisper/postgres:/var/lib/postgresql/data
     networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vtf}"]
@@ -101,7 +103,8 @@ services:
     image: redis:7-alpine
     profiles: [dev, prod]
     command: ["redis-server", "--appendonly", "yes"]
-    volumes: [redis_data:/data]
+    volumes:
+      - /srv/poleia/data/medical-whisper/redis:/data
     networks: [internal]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -111,14 +114,13 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------- TTS — synthèse vocale (Piper, CPU)
-  # HTTP sur :5000. Régler dans .env :  TTS_BACKEND=piper_http   PIPER_URL=http://piper:5000
   piper:
     build:
       context: ./piper-server
     profiles: [voice, prod]
     environment:
       PIPER_VOICE: ${PIPER_VOICE:-/voices/fr_FR-siwis-medium.onnx}
-    volumes: [./voices:/voices:ro]             # voix .onnx (hors image : ~63 Mo)
+    volumes: [./voices:/voices:ro]
     networks: [internal]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
@@ -127,14 +129,5 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Agent + extraction LLM : Ollama Cloud (pas de service local). Régler dans .env :
-  #   AGENT_BACKEND=ollama   EXTRACTOR_BACKEND=ollama
-  #   OLLAMA_HOST=https://ollama.com   OLLAMA_API_KEY=<clé>
-
 networks:
   internal: {}
-
-volumes:
-  pg_data: {}
-  redis_data: {}
-  caddy_data: {}
