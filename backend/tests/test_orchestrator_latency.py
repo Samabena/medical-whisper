@@ -149,21 +149,25 @@ class TalkativeAgent:
         await self._q.put(None)
 
 
-class BargeInConnection:
-    """Délivre une trame micro DÈS que l'agent commence à parler, puis stoppe."""
+# Trame micro « voisée » : PCM16 d'amplitude élevée (RMS ≫ seuil) → détectée comme parole.
+_VOICED_FRAME = (b"\x00\x40") * 512  # échantillons 0x4000 = 16384
 
-    def __init__(self) -> None:
+
+class BargeInConnection:
+    """Délivre des trames micro VOISÉES dès que l'agent parle (VAD → barge-in), puis stoppe."""
+
+    def __init__(self, voiced_frames: int = 3) -> None:
         self.sent_json: list[dict] = []
         self.sent_audio: list[bytes] = []
         self.closed = False
         self._speaking = asyncio.Event()
-        self._frame_sent = False
+        self._remaining = voiced_frames
 
     async def receive(self) -> ClientMessage:
-        if not self._frame_sent:
+        if self._remaining > 0:
             await self._speaking.wait()  # attend que l'agent parle
-            self._frame_sent = True
-            return AudioFrame(b"\xaa")  # reprise de parole → barge-in
+            self._remaining -= 1
+            return AudioFrame(_VOICED_FRAME)  # parole soutenue → barge-in après N trames
         await asyncio.sleep(0.05)
         return Control({"type": "stop"})
 
@@ -191,9 +195,14 @@ async def test_barge_in_interrompt_l_agent():
     metrics = InMemoryMetrics()
 
     agent = TalkativeAgent()
-    conn = BargeInConnection()
+    conn = BargeInConnection(voiced_frames=3)
     uc = RunLiveDialogue(
-        _NoopExtractor(), InMemorySessionResultStore(), sessions, metrics=metrics, barge_in=True
+        _NoopExtractor(),
+        InMemorySessionResultStore(),
+        sessions,
+        metrics=metrics,
+        barge_in=True,
+        barge_in_min_frames=2,  # 2 trames voisées suffisent (déterministe pour le test)
     )
     await asyncio.wait_for(uc.execute(conn, agent, form, session), timeout=5)
 
@@ -201,3 +210,57 @@ async def test_barge_in_interrompt_l_agent():
     assert any(m.get("type") == "interrupted" for m in conn.sent_json)
     assert metrics.snapshot()["counters"]["barge_in"] == 1
     assert len(conn.sent_audio) < 8  # tous les chunks n'ont pas été relayés
+
+
+class SilenceConnection:
+    """Envoie des trames micro SILENCIEUSES pendant que l'agent parle : ne doit PAS couper."""
+
+    def __init__(self, silent_frames: int = 12) -> None:
+        self.sent_json: list[dict] = []
+        self.sent_audio: list[bytes] = []
+        self.closed = False
+        self._speaking = asyncio.Event()
+        self._remaining = silent_frames
+
+    async def receive(self) -> ClientMessage:
+        if self._remaining > 0:
+            await self._speaking.wait()  # attend que l'agent parle
+            self._remaining -= 1
+            return AudioFrame(b"\x00\x00" * 512)  # silence (RMS 0) → aucun barge-in
+        await asyncio.sleep(0.05)
+        return Control({"type": "stop"})
+
+    async def send_audio(self, data: bytes) -> None:
+        self.sent_audio.append(data)
+        self._speaking.set()
+
+    async def send_json(self, msg: dict) -> None:
+        self.sent_json.append(msg)
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed = True
+
+
+async def test_barge_in_ignore_le_silence():
+    """Régression : le micro streame en continu ; les trames silencieuses ne doivent JAMAIS
+    couper l'agent (bug historique = coupure dès le premier mot, on n'entendait rien)."""
+    form = _form()
+    session = LiveSession(account_id=1, form_id="consult")
+    sessions = InMemorySessionRepo()
+    await sessions.add(session)
+    metrics = InMemoryMetrics()
+
+    agent = TalkativeAgent()
+    conn = SilenceConnection(silent_frames=12)
+    uc = RunLiveDialogue(
+        _NoopExtractor(),
+        InMemorySessionResultStore(),
+        sessions,
+        metrics=metrics,
+        barge_in=True,
+        barge_in_min_frames=2,
+    )
+    await asyncio.wait_for(uc.execute(conn, agent, form, session), timeout=5)
+
+    assert not any(m.get("type") == "interrupted" for m in conn.sent_json)
+    assert metrics.snapshot()["counters"].get("barge_in", 0) == 0

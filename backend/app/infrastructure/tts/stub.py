@@ -8,6 +8,9 @@ de tester tout le pipeline (segmentation par phrase, envoi audio, barge-in) sans
 from __future__ import annotations
 
 import struct
+from typing import AsyncIterator
+
+from app.application.ports.tts import TTS_SAMPLE_RATE
 
 SAMPLE_RATE = 16_000
 _BYTES_PAR_CAR = 800  # ~25 ms de silence par caractère (durée plausible)
@@ -36,3 +39,13 @@ class StubTts:
     async def synthetiser(self, texte: str, voix: str) -> bytes:
         n_samples = max(1, len(texte.strip())) * (_BYTES_PAR_CAR // 2)
         return _wav_silence(n_samples)
+
+    async def stream(self, texte: str, voix: str) -> AsyncIterator[bytes]:
+        """Émet du PCM s16le silencieux @ TTS_SAMPLE_RATE en plusieurs chunks (mode live)."""
+        n_samples = max(1, len(texte.strip())) * (_BYTES_PAR_CAR // 2)
+        # Durée équivalente au débit de synthetiser, rééchelonnée au taux du contrat streaming.
+        n_samples = int(n_samples * TTS_SAMPLE_RATE / SAMPLE_RATE)
+        pcm = b"\x00\x00" * n_samples
+        step = 4096  # ~93 ms/chunk @ 22050 — simule un flux progressif
+        for i in range(0, len(pcm), step):
+            yield pcm[i : i + step]

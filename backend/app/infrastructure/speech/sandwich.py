@@ -68,6 +68,7 @@ class SandwichSpeechSession:
     reply: ReplyProvider
     voice: str
     language: Language
+    clause_min_chars: int = 60  # segmentation fine (clauses) pour le 1er son ; 0 = phrases seules
 
     def __post_init__(self) -> None:
         self._out: asyncio.Queue[SpeechEvent | None] = asyncio.Queue()
@@ -77,9 +78,13 @@ class SandwichSpeechSession:
         self._opening = asyncio.create_task(self._dire(self.reply.opening()))
 
     async def _dire(self, source: AsyncIterator[str]) -> None:
-        """Synthétise une réplique agent **par phrase** (TTS pipeliné) puis clôt le tour."""
+        """Synthétise une réplique agent **par phrase/clause**, en STREAMING (TTS pipeliné).
+
+        Chaque phrase est synthétisée en flux : ses chunks PCM sont relayés au fil de l'eau
+        (plusieurs `AudioChunk` par phrase) → premier son plus tôt et lecture gapless côté
+        navigateur. La segmentation fine (clauses) réduit encore la latence du 1er son."""
         async with self._reply_lock:
-            async for phrase in aiter_sentences(source):
+            async for phrase in aiter_sentences(source, clause_min_chars=self.clause_min_chars):
                 if self._closed:
                     return
                 parle = clean_for_tts(phrase)  # texte « parlable » (sans @, #, *, émojis…)
@@ -87,13 +92,16 @@ class SandwichSpeechSession:
                     continue  # phrase = uniquement des symboles : rien à dire
                 await self._out.put(Transcript(parle, "agent", is_final=False))
                 try:
-                    wav = await self.tts.synthetiser(parle, self.voice)
+                    async for pcm in self.tts.stream(parle, self.voice):
+                        if self._closed:
+                            return
+                        if pcm:
+                            await self._out.put(AudioChunk(pcm))
                 except Exception as exc:  # noqa: BLE001 — le TTS ne doit pas casser le relais
                     # %r expose le TYPE même quand str(exc) est vide (ex. NotImplementedError
                     # de create_subprocess_exec sous SelectorEventLoop : uvicorn --reload sur Windows).
                     logger.warning("TTS en échec : %r", exc)
                     continue
-                await self._out.put(AudioChunk(wav))
             await self._out.put(AgentTurnEnd())
 
     async def _pump_stt(self) -> None:
@@ -147,6 +155,7 @@ class SandwichSpeechAgent:
     tts: TtsPort
     reply_factory: ReplyFactory
     hotwords: list[str] = field(default_factory=list)  # repli si la session n'en fournit pas
+    clause_min_chars: int = 60  # segmentation fine (clauses) pour réduire la latence du 1er son
 
     async def open(
         self,
@@ -161,5 +170,10 @@ class SandwichSpeechAgent:
         stt = await self.stt_stream.open(language=language, hotwords=mots)
         reply = self.reply_factory(persona, language)
         return SandwichSpeechSession(
-            stt=stt, tts=self.tts, reply=reply, voice=voice, language=language
+            stt=stt,
+            tts=self.tts,
+            reply=reply,
+            voice=voice,
+            language=language,
+            clause_min_chars=self.clause_min_chars,
         )

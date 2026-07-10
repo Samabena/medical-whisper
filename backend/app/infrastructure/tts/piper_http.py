@@ -5,17 +5,18 @@ appelle un **serveur Piper distant** par HTTP. Cela permet d'isoler Piper dans u
 Docker dédié (`piper-server/`) : le backend ne dépend plus du binaire ni de la voix .onnx.
 
 Contrat du serveur (`piper-server/server.py`) :
-  POST {url}/synthesize   body JSON {"text": "...", "voice": "<chemin .onnx optionnel>"}
-                          → 200  Content-Type: audio/wav  (octets RIFF/WAVE)
+  POST {url}/synthesize   → 200 audio/wav (WAV complet)              → `synthetiser`
+  POST {url}/stream       → 200 chunked, PCM s16le mono @ X-Sample-Rate → `stream` (live)
 
 Appelé **par phrase** par le pipeline (segmenteur) pour réduire le délai au premier son.
-Aucune donnée de santé persistée : le WAV est lu en mémoire et jamais écrit sur disque.
+Aucune donnée de santé persistée : l'audio est lu en mémoire et jamais écrit sur disque.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import AsyncIterator
 
 import httpx
 
@@ -42,3 +43,29 @@ class PiperHttpTts:
             detail = resp.text[:200]
             raise RuntimeError(f"Serveur Piper a répondu {resp.status_code} : {detail}")
         return resp.content
+
+    async def stream(self, texte: str, voix: str) -> AsyncIterator[bytes]:
+        """Streame le PCM depuis /stream, chunk par chunk (mode « live »).
+
+        Garantit des chunks de taille **paire** (échantillons 16 bits entiers) en reportant
+        un éventuel octet orphelin d'un chunk réseau sur le suivant."""
+        modele = voix or self.voice
+        base = self.url.rstrip("/")
+        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            async with client.stream(
+                "POST", f"{base}/stream", json={"text": texte, "voice": modele}
+            ) as resp:
+                if resp.status_code != 200:
+                    detail = (await resp.aread())[:200].decode(errors="replace")
+                    raise RuntimeError(f"Serveur Piper a répondu {resp.status_code} : {detail}")
+                reste = b""  # octet orphelin éventuel (frontière réseau au milieu d'un échantillon)
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    buf = reste + chunk
+                    pair = len(buf) - (len(buf) % 2)
+                    reste = buf[pair:]
+                    if pair:
+                        yield buf[:pair]
+                if reste:  # ne devrait pas arriver (PCM 16 bits = pair) ; on complète par sûreté
+                    yield reste + b"\x00"

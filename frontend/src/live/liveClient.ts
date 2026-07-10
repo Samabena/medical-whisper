@@ -28,8 +28,10 @@ export async function startLive(
   const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`);
   ws.binaryType = "arraybuffer";
 
-  // Lecture de la voix de l'agent : chaque frame binaire est un WAV (Piper) complet.
-  // On les décode et on les enchaîne sans recouvrement via un curseur de temps.
+  // Lecture de la voix de l'agent : le serveur streame du PCM s16le mono BRUT (pas de WAV) au
+  // fil de l'eau — plusieurs chunks par phrase. On convertit chaque chunk en AudioBuffer et on
+  // les enchaîne sans recouvrement via un curseur de temps (lecture gapless « live »).
+  const PIPER_RATE = 22050; // taux natif de la voix Piper fr_FR-siwis-medium (contrat TTS_SAMPLE_RATE)
   let playCtx: AudioContext | null = null;
   let nextPlayTime = 0;
   // Sources programmées encore en attente/lecture + compteur de génération. Un barge-in
@@ -39,7 +41,7 @@ export async function startLive(
   let scheduled: AudioBufferSourceNode[] = [];
   let audioGen = 0;
   const flushAgentAudio = () => {
-    audioGen++; // invalide les décodages encore en vol (cf. playAgentAudio)
+    audioGen++;
     for (const s of scheduled) {
       try {
         s.stop();
@@ -50,29 +52,30 @@ export async function startLive(
     scheduled = [];
     nextPlayTime = playCtx ? playCtx.currentTime : 0;
   };
-  const playAgentAudio = async (data: ArrayBuffer) => {
+  const playAgentAudio = (data: ArrayBuffer) => {
+    // Chunk PCM s16le → Float32 [-1, 1]. On tronque à un nombre pair d'octets par sûreté
+    // (un échantillon = 2 octets) ; le backend garantit déjà des chunks pairs.
+    const usable = data.byteLength - (data.byteLength % 2);
+    if (usable <= 0) return;
+    const pcm = new Int16Array(data, 0, usable / 2);
+    if (!playCtx) playCtx = new AudioContext();
+    if (playCtx.state === "suspended") void playCtx.resume();
     const gen = audioGen;
-    try {
-      if (!playCtx) playCtx = new AudioContext();
-      if (playCtx.state === "suspended") await playCtx.resume();
-      const buf = await playCtx.decodeAudioData(data.slice(0));
-      if (gen !== audioGen) return; // un flush (barge-in) est survenu pendant le décodage
-      const src = playCtx.createBufferSource();
-      src.buffer = buf;
-      src.connect(playCtx.destination);
-      const now = playCtx.currentTime;
-      const start = Math.max(now, nextPlayTime);
-      src.start(start);
-      nextPlayTime = start + buf.duration;
-      scheduled.push(src);
-      src.onended = () => {
-        scheduled = scheduled.filter((s) => s !== src);
-      };
-    } catch (err) {
-      // Ne plus avaler silencieusement : une frame non décodée = une phrase affichée mais
-      // jamais entendue. On la trace pour pouvoir diagnostiquer un éventuel souci de format.
-      console.warn("[live] frame audio agent non décodable, ignorée :", err);
-    }
+    const buf = playCtx.createBuffer(1, pcm.length, PIPER_RATE);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 0x8000;
+    if (gen !== audioGen) return; // un flush (barge-in) est survenu entre-temps
+    const src = playCtx.createBufferSource();
+    src.buffer = buf; // AudioContext rééchantillonne 22050 → taux matériel automatiquement
+    src.connect(playCtx.destination);
+    const now = playCtx.currentTime;
+    const start = Math.max(now, nextPlayTime);
+    src.start(start);
+    nextPlayTime = start + buf.duration;
+    scheduled.push(src);
+    src.onended = () => {
+      scheduled = scheduled.filter((s) => s !== src);
+    };
   };
 
   ws.onmessage = (ev) => {
@@ -125,7 +128,16 @@ export async function startLive(
     );
   } else {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // echoCancellation : ESSENTIEL pour le barge-in. Sans casque, le micro capte la voix
+      // de l'agent dans les haut-parleurs → le VAD serveur la prendrait pour une reprise de
+      // parole et couperait l'agent en boucle. L'AEC du navigateur retire ce que l'on joue.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       // IMPORTANT : beaucoup de navigateurs IGNORENT `sampleRate` et capturent au taux
       // matériel (souvent 48 kHz). On lit donc le taux RÉEL (ctx.sampleRate) et on
       // rééchantillonne nous-mêmes vers 16 kHz (attendu par le STT) — fiable partout.
@@ -139,6 +151,26 @@ export async function startLive(
       processor.connect(ctx.destination);
       let carry = new Float32Array(0); // échantillons restants entre deux blocs
       let readPos = 0; // position de lecture fractionnaire conservée d'un bloc à l'autre
+      // --- VAD client : ne streamer que la PAROLE ----------------------------------------
+      // Le micro tourne en continu ; envoyer le silence à Whisper le fait HALLUCINER du texte
+      // (« Merci. », « Sous-titres… ») → l'agent répond à du vide et le formulaire se remplit
+      // de valeurs inventées. On n'émet donc que si l'énergie dépasse un seuil, avec un
+      // PRÉ-ROLL (contexte avant l'attaque du mot, pour ne pas couper le début) et un HANGOVER
+      // (queue de mot + silence final, pour que le serveur détecte la fin de tour).
+      // Seuil d'énergie (RMS échantillons 16 bits). Avec noiseSuppression, le silence tombe
+      // très bas (~<50) alors que la parole est nettement au-dessus : un seuil modéré sépare
+      // les deux sans couper la voix. ↑ = moins sensible (risque de couper la parole).
+      const VAD_RMS = 300;
+      const PREROLL_FRAMES = 4; // ~0,3 s de contexte envoyé quand la parole démarre
+      const HANGOVER_FRAMES = 10; // ~0,85 s encore envoyés après la fin de parole
+      let hangover = 0;
+      let preroll: ArrayBuffer[] = [];
+      let vadFrames = 0; // pour throttler le log de calibration
+      const rms16 = (a: Int16Array) => {
+        let s = 0;
+        for (let k = 0; k < a.length; k++) s += a[k] * a[k];
+        return a.length ? Math.sqrt(s / a.length) : 0;
+      };
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         const cur = e.inputBuffer.getChannelData(0);
@@ -159,7 +191,25 @@ export async function startLive(
         for (let k = 0; k < out.length; k++) {
           buf[k] = Math.max(-1, Math.min(1, out[k])) * 0x7fff;
         }
-        if (buf.length) ws.send(buf.buffer);
+        if (!buf.length) return;
+        const energy = rms16(buf);
+        // Log de calibration (~1,4 s) : compare l'énergie de ta voix au seuil dans la console.
+        if (++vadFrames % 16 === 0) {
+          console.debug(`[vad] energy≈${energy | 0} (seuil ${VAD_RMS}, ${energy >= VAD_RMS ? "PAROLE" : "silence"})`);
+        }
+        if (energy >= VAD_RMS) {
+          if (hangover === 0) console.debug(`[vad] → parole détectée (energy=${energy | 0}), envoi au STT`);
+          for (const p of preroll) ws.send(p); // contexte avant l'attaque du mot
+          preroll = [];
+          ws.send(buf.buffer);
+          hangover = HANGOVER_FRAMES;
+        } else if (hangover > 0) {
+          ws.send(buf.buffer); // queue de parole + silence final (fin de tour côté serveur)
+          hangover--;
+        } else {
+          preroll.push(buf.buffer); // silence : on ne garde qu'un court contexte glissant
+          if (preroll.length > PREROLL_FRAMES) preroll.shift();
+        }
       };
     } catch (err) {
       const nom = (err as { name?: string } | null)?.name;

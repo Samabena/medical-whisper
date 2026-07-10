@@ -18,6 +18,7 @@ def build_stt_stream(settings: Settings) -> SttStreamPort:
             url=settings.whisperlive_url,
             model=settings.whisper_model,
             input_rate=settings.audio_input_rate,
+            min_final_confidence=settings.stt_final_min_confidence,
         )
 
     from app.infrastructure.stt.stub import StubSttStream

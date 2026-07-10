@@ -42,6 +42,54 @@ async def test_emettre_segment_mappe_partiel_et_final():
     assert final.words[0].conf == 0.95
 
 
+def _fake_session(min_conf: float = 0.5):
+    import asyncio
+
+    s = WhisperLiveSession.__new__(WhisperLiveSession)  # sans ouvrir de WS
+    s._queue = asyncio.Queue()
+    s._closed = False
+    s._last_partial = ""
+    s.min_final_confidence = min_conf
+    return s
+
+
+async def test_final_hallucine_rejete():
+    """Anti-hallucination : un final douteux (conf basse / no_speech haut / artefact) est ignoré."""
+    # Confiance trop basse (silence → texte fantôme peu sûr).
+    s = _fake_session()
+    await s._emettre_segment(
+        {"text": "merci beaucoup", "completed": True, "words": [{"word": "merci", "probability": 0.2}]}
+    )
+    assert s._queue.empty()
+
+    # Proba de non-parole élevée.
+    s = _fake_session()
+    await s._emettre_segment(
+        {"text": "bonjour", "completed": True, "no_speech_prob": 0.9,
+         "words": [{"word": "bonjour", "probability": 0.95}]}
+    )
+    assert s._queue.empty()
+
+    # Artefact d'hallucination connu (sous-titres).
+    s = _fake_session()
+    await s._emettre_segment(
+        {"text": "Sous-titres réalisés par la communauté d'Amara.org", "completed": True,
+         "words": [{"word": "x", "probability": 0.99}]}
+    )
+    assert s._queue.empty()
+
+
+async def test_final_legitime_conserve():
+    """Un final confiant, avec parole, non-artefact → bien émis."""
+    s = _fake_session()
+    await s._emettre_segment(
+        {"text": "le patient a de la fièvre", "completed": True,
+         "no_speech_prob": 0.05, "words": [{"word": "fièvre", "probability": 0.9}]}
+    )
+    ev = s._queue.get_nowait()
+    assert isinstance(ev, SttFinal) and ev.text == "le patient a de la fièvre"
+
+
 @pytest.mark.integration
 async def test_connexion_serveur_reel():
     """Connexion à un vrai serveur WhisperLive (skippé sans serveur)."""

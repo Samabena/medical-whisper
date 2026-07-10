@@ -46,3 +46,17 @@ async def _stream(items):
 async def test_variante_async():
     out = [p async for p in aiter_sentences(_stream(["Salut", "! Ça va", " ?"]))]
     assert out == ["Salut!", "Ça va ?"]
+
+
+def test_clause_coupe_sur_virgule_si_assez_long():
+    """LIVE-7.4 : avec clause_min_chars, une phrase longue est coupée sur la virgule
+    (1er son plus tôt), mais une clause courte (« Oui, ») n'est PAS fragmentée."""
+    texte = "Très bien, je vais maintenant vous poser quelques questions."
+    phrases = list(iter_sentences([texte], clause_min_chars=10))
+    assert phrases[0] == "Très bien,"  # coupé sur la virgule (≥ 10 car.)
+    assert phrases[1] == "je vais maintenant vous poser quelques questions."
+
+
+def test_clause_courte_non_fragmentee():
+    # « Oui, » (4 car.) < seuil : pas de coupure, la phrase reste entière.
+    assert list(iter_sentences(["Oui, bonjour."], clause_min_chars=20)) == ["Oui, bonjour."]

@@ -11,8 +11,11 @@ complétion. La première boucle qui se termine arrête proprement l'autre.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import logging
+import math
+import sys
 import time
 
 from app.application.live.completion import form_state_to_dict, is_complete
@@ -37,6 +40,24 @@ from app.domain.value_objects import SessionStatus
 logger = logging.getLogger(__name__)
 
 
+def _rms_pcm16(frame: bytes) -> float:
+    """Énergie (RMS) d'une trame PCM signée 16 bits little-endian.
+
+    Sert de VAD léger pour le barge-in : les trames de silence ont un RMS ~0, la parole
+    un RMS élevé. 0.0 si trame vide/incomplète. Stdlib uniquement (pas de numpy backend)."""
+    n = len(frame) - (len(frame) % 2)
+    if n <= 0:
+        return 0.0
+    echantillons = array.array("h")
+    echantillons.frombytes(frame[:n])
+    if sys.byteorder == "big":  # l'entrée (navigateur) est little-endian
+        echantillons.byteswap()
+    somme = 0
+    for s in echantillons:
+        somme += s * s
+    return math.sqrt(somme / len(echantillons))
+
+
 class RunLiveDialogue:
     def __init__(
         self,
@@ -48,6 +69,8 @@ class RunLiveDialogue:
         *,
         speculative_trigger: bool = False,
         barge_in: bool = False,
+        barge_in_rms: float = 900.0,
+        barge_in_min_frames: int = 3,
         backchannel: bool = False,
         backchannel_text: str = "D'accord…",
     ) -> None:
@@ -59,6 +82,8 @@ class RunLiveDialogue:
         # Leviers de latence (LIVE-7.4), désactivés par défaut — câblés depuis la config.
         self._speculative = speculative_trigger
         self._barge_in = barge_in
+        self._barge_in_rms = barge_in_rms
+        self._barge_in_min_frames = barge_in_min_frames
         self._backchannel_on = backchannel
         self._backchannel_text = backchannel_text
 
@@ -85,6 +110,8 @@ class RunLiveDialogue:
         last_partial = {"text": ""}
         # Suivi de la prise de parole de l'agent (pour le barge-in) et timing endpoint.
         speaking = {"on": False, "interrupted": False}
+        # Compteur de trames micro « voisées » consécutives (VAD du barge-in).
+        voiced = {"n": 0}
         timing: dict[str, float | None] = {"endpoint": None}
 
         async def process_user(text: str, *, count_turn: bool = True) -> None:
@@ -130,13 +157,25 @@ class RunLiveDialogue:
                     done.set()
                     return
                 if isinstance(msg, AudioFrame):
-                    # Barge-in : la reprise de parole coupe l'agent qui parle (LIVE-7.4).
+                    # Barge-in VAD (LIVE-7.4) : le micro streame en continu (silence compris),
+                    # donc on ne coupe PAS sur une trame brute — sinon l'agent est interrompu
+                    # dès son premier mot. On exige N trames « voisées » (énergie > seuil)
+                    # CONSÉCUTIVES = vraie reprise de parole. L'annulation d'écho côté navigateur
+                    # évite que la voix de l'agent captée par le micro déclenche un faux barge-in.
                     if self._barge_in and speaking["on"]:
-                        speaking["interrupted"] = True
-                        speaking["on"] = False
-                        self._metric_incr("barge_in")
-                        logger.info("Barge-in : reprise de parole → coupure de l'agent (interrupted)")
-                        await conn.send_json({"type": "interrupted"})
+                        if _rms_pcm16(msg.data) >= self._barge_in_rms:
+                            voiced["n"] += 1
+                        else:
+                            voiced["n"] = 0
+                        if voiced["n"] >= self._barge_in_min_frames:
+                            voiced["n"] = 0
+                            speaking["interrupted"] = True
+                            speaking["on"] = False
+                            self._metric_incr("barge_in")
+                            logger.info("Barge-in : parole détectée (VAD) → coupure de l'agent")
+                            await conn.send_json({"type": "interrupted"})
+                    else:
+                        voiced["n"] = 0
                     await agent.send_audio(msg.data)
                 elif isinstance(msg, Control):
                     type_ = msg.payload.get("type")

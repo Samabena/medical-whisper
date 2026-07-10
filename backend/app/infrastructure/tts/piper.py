@@ -19,12 +19,15 @@ Proactor, sans bloquer l'event loop.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import subprocess
 import tempfile
+import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -67,3 +70,16 @@ class PiperTts:
         # Déport dans un thread : évite le NotImplementedError des subprocess asyncio
         # sous SelectorEventLoop (uvicorn --reload, Windows) sans bloquer la boucle.
         return await asyncio.to_thread(self._synthetiser_bloquant, texte, modele)
+
+    async def stream(self, texte: str, voix: str) -> AsyncIterator[bytes]:
+        """Mode « live » : synthétise le WAV puis en émet le PCM en chunks.
+
+        Le binaire Piper ne streame pas nativement : on récupère le WAV complet puis on
+        extrait le PCM (sans l'en-tête RIFF) découpé en morceaux. La voix fr_FR-siwis-medium
+        est à TTS_SAMPLE_RATE, cohérent avec le contrat de streaming."""
+        wav = await self.synthetiser(texte, voix)
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            pcm = w.readframes(w.getnframes())
+        step = 8192
+        for i in range(0, len(pcm), step):
+            yield pcm[i : i + step]

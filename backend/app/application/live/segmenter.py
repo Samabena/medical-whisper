@@ -17,6 +17,10 @@ from typing import AsyncIterator, Iterable, Iterator
 # Bornes de fin de phrase. Le « : » est inclus car il marque souvent une relance
 # orale (« Une question : … »).
 _SENTENCE_END = ".!?:…"
+# Bornes de clause (secondaires) : ne coupent que si le segment est déjà assez long
+# (`clause_min_chars`) — évite les fragments minuscules (« Oui, ») tout en raccourcissant
+# les phrases à rallonge pour que le 1er son parte plus tôt.
+_CLAUSE_END = ",;"
 
 # Abréviations FR fréquentes : un point juste après ne clôt PAS la phrase. On
 # compare en minuscules, sans le point final.
@@ -31,12 +35,14 @@ def _est_abreviation(buffer: str) -> bool:
     return mot.lower() in _ABBREVIATIONS
 
 
-def _coupe(buffer: str, max_chars: int) -> tuple[str | None, str]:
-    """Tente d'extraire une phrase complète de `buffer`.
+def _coupe(buffer: str, max_chars: int, clause_min_chars: int = 0) -> tuple[str | None, str]:
+    """Tente d'extraire une phrase (ou clause) complète de `buffer`.
 
     Renvoie `(phrase, reste)`. `phrase` vaut `None` si aucune borne exploitable
     n'est encore présente. La longueur maxi `max_chars` force une coupure sur le
-    dernier espace pour borner la latence même sans ponctuation.
+    dernier espace pour borner la latence même sans ponctuation. Si `clause_min_chars > 0`,
+    on coupe aussi sur une borne de clause (« , » « ; ») dès que le segment atteint cette
+    longueur — pour réduire la latence du premier son sur les phrases longues.
     """
     for i, ch in enumerate(buffer):
         if ch in _SENTENCE_END:
@@ -45,6 +51,8 @@ def _coupe(buffer: str, max_chars: int) -> tuple[str | None, str]:
             if ch == "." and _est_abreviation(candidat):
                 continue
             return candidat.strip(), buffer[i + 1 :]
+        if clause_min_chars and ch in _CLAUSE_END and (i + 1) >= clause_min_chars:
+            return buffer[: i + 1].strip(), buffer[i + 1 :]
 
     if len(buffer) >= max_chars:
         # Pas de ponctuation mais segment trop long : couper au dernier espace.
@@ -54,8 +62,10 @@ def _coupe(buffer: str, max_chars: int) -> tuple[str | None, str]:
     return None, buffer
 
 
-def iter_sentences(fragments: Iterable[str], *, max_chars: int = 200) -> Iterator[str]:
-    """Découpe un flux **synchrone** de fragments texte en phrases.
+def iter_sentences(
+    fragments: Iterable[str], *, max_chars: int = 200, clause_min_chars: int = 0
+) -> Iterator[str]:
+    """Découpe un flux **synchrone** de fragments texte en phrases (ou clauses).
 
     Émet chaque phrase non vide dès qu'elle est complète ; vide le reste à la fin.
     """
@@ -63,7 +73,7 @@ def iter_sentences(fragments: Iterable[str], *, max_chars: int = 200) -> Iterato
     for fragment in fragments:
         buffer += fragment
         while True:
-            phrase, buffer = _coupe(buffer, max_chars)
+            phrase, buffer = _coupe(buffer, max_chars, clause_min_chars)
             if phrase is None:
                 break
             if phrase:
@@ -74,7 +84,7 @@ def iter_sentences(fragments: Iterable[str], *, max_chars: int = 200) -> Iterato
 
 
 async def aiter_sentences(
-    fragments: AsyncIterator[str], *, max_chars: int = 200
+    fragments: AsyncIterator[str], *, max_chars: int = 200, clause_min_chars: int = 0
 ) -> AsyncIterator[str]:
     """Variante **asynchrone** : découpe le streaming de tokens de l'agent LLM.
 
@@ -84,7 +94,7 @@ async def aiter_sentences(
     async for fragment in fragments:
         buffer += fragment
         while True:
-            phrase, buffer = _coupe(buffer, max_chars)
+            phrase, buffer = _coupe(buffer, max_chars, clause_min_chars)
             if phrase is None:
                 break
             if phrase:

@@ -2,7 +2,8 @@
 #
 # Chaque serveur est un composant Docker distinct :
 #   backend  (FastAPI)      · frontend (React/nginx) · db (Postgres) · redis
-#   piper    (TTS HTTP, CPU)
+#   piper    (TTS HTTP, CPU) — « Piper live » : voix .onnx chargée EN MÉMOIRE au démarrage
+#                             + endpoint /stream (PCM chunké) ; backend via TTS_BACKEND=piper_http
 #   proxy    (Caddy, TLS)   · migrate (Alembic, one-shot)
 # Le STT est fourni par le serveur en ligne de l'équipe (ws://srv-team-ia:9300) via
 # STT_BACKEND=whisperlive. L'agent + l'extraction LLM passent par Ollama Cloud
@@ -113,7 +114,12 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- TTS — synthèse vocale (Piper, CPU)
+  # ---------------------------------------------------------------- TTS — « Piper live » (CPU, en mémoire)
+  # Voix .onnx chargée UNE fois au démarrage (API PiperVoice) ; /stream émet le PCM s16le au fil
+  # de l'eau (1er son plus tôt). Le backend l'utilise via TTS_BACKEND=piper_http + PIPER_URL.
+  # NB : le backend NE dépend PAS durement de `piper` (le profil dev doit rester hors-ligne, et une
+  # panne TTS ne coupe pas le relais : PiperHttpTts lève une erreur non fatale). Le healthcheck
+  # ci-dessous renvoie 503 tant que la voix n'est pas chargée (détecte un .onnx corrompu au boot).
   piper:
     build:
       context: ./piper-server

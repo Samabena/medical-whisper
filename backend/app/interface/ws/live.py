@@ -139,6 +139,8 @@ async def live(
         metrics=metrics,
         speculative_trigger=config.speculative_trigger,
         barge_in=config.barge_in,
+        barge_in_rms=config.barge_in_rms_threshold,
+        barge_in_min_frames=config.barge_in_min_voiced_frames,
         backchannel=config.backchannel,
         backchannel_text=config.backchannel_text,
     )

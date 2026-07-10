@@ -24,8 +24,6 @@ try:  # audioop : rééchantillonnage de qualité (stdlib, présent en 3.11).
 except ImportError:  # pragma: no cover — retiré en 3.13
     audioop = None  # type: ignore
 
-WHISPER_RATE = 16000  # WhisperLive/faster-whisper attend du 16 kHz mono.
-
 from app.application.ports.stt import (
     SttEndpoint,
     SttEvent,
@@ -35,10 +33,46 @@ from app.application.ports.stt import (
 )
 from app.domain.value_objects import Language
 
+WHISPER_RATE = 16000  # WhisperLive/faster-whisper attend du 16 kHz mono.
+
 logger = logging.getLogger(__name__)
 
 # Confiance mini d'un partiel pour être jugé « stable » (déclenchement spéculatif).
 _STABLE_MIN_CONF = 0.6
+
+# Au-dessus de cette proba de « non-parole », le segment est du silence → hallucination.
+_NO_SPEECH_MAX = 0.6
+
+# Phrases typiques hallucinées par Whisper sur du silence/bruit (artefacts d'entraînement
+# vidéo). Comparées en minuscules, sans ponctuation de fin. Volontairement conservateur :
+# le vrai garde-fou est la confiance + le VAD client ; on ne bloque que les artefacts francs.
+_HALLUCINATIONS = frozenset(
+    {
+        "sous-titres réalisés par la communauté d'amara.org",
+        "sous-titrage société radio-canada",
+        "merci d'avoir regardé cette vidéo",
+        "merci d'avoir regardé cette vidéo !",
+        "abonnez-vous",
+        "thanks for watching",
+        "thank you for watching",
+        "sous-titres réalisés para la communauté d'amara.org",
+    }
+)
+
+
+def _confidence(seg: dict) -> float:
+    """Confiance d'un segment : moyenne des probas de mots si dispo, sinon proba du segment."""
+    mots = seg.get("words") or []
+    if mots:
+        probs = [float(w.get("probability", 1.0)) for w in mots]
+        if probs:
+            return sum(probs) / len(probs)
+    return float(seg.get("probability", 1.0))
+
+
+def _est_hallucination(texte: str) -> bool:
+    """Vrai si le texte correspond à un artefact d'hallucination connu."""
+    return texte.strip().rstrip(".!").strip().lower() in _HALLUCINATIONS
 
 
 def _pcm16_to_float32_bytes(frame: bytes) -> bytes:
@@ -65,6 +99,8 @@ class WhisperLiveSession:
     # Encodage envoyé au serveur : "float32" (WhisperLive collabora standard) ou
     # "pcm_s16le" (serveur custom qui prend du PCM brut + sample_rate en query).
     audio_format: str = "float32"
+    # Confiance mini d'un final pour être accepté (anti-hallucination sur silence).
+    min_final_confidence: float = 0.5
     _queue: asyncio.Queue = field(default_factory=asyncio.Queue)
 
     def __post_init__(self) -> None:
@@ -109,9 +145,25 @@ class WhisperLiveSession:
 
     async def _emettre_segment(self, seg: dict) -> None:
         texte = (seg.get("text") or "").strip()
+        logger.debug(
+            "Segment WhisperLive : completed=%s no_speech=%.2f prob=%.2f texte=%r",
+            seg.get("completed"), float(seg.get("no_speech_prob", 0.0)),
+            float(seg.get("probability", 1.0)), texte,
+        )
         if not texte:
             return
         if seg.get("completed"):
+            # Anti-hallucination : Whisper invente du texte sur du silence/bruit. On rejette
+            # un final si la proba de non-parole est haute, si la confiance est trop basse,
+            # ou s'il matche un artefact connu → n'alimente ni l'agent ni l'extraction.
+            no_speech = float(seg.get("no_speech_prob", 0.0))
+            conf = _confidence(seg)
+            if no_speech >= _NO_SPEECH_MAX or conf < self.min_final_confidence or _est_hallucination(texte):
+                logger.debug(
+                    "Final ignoré (hallucination probable : no_speech=%.2f conf=%.2f) : %r",
+                    no_speech, conf, texte,
+                )
+                return
             mots = [
                 WordConf(w.get("word", ""), float(w.get("probability", 1.0)))
                 for w in seg.get("words", [])
@@ -165,6 +217,7 @@ class WhisperLiveStream:
     url: str
     model: str = "large-v3"
     input_rate: int = WHISPER_RATE  # taux de l'audio entrant (rééchantillonné → 16 k)
+    min_final_confidence: float = 0.5  # anti-hallucination (transmis à chaque session)
 
     async def open(self, *, language: Language, hotwords: list[str]) -> WhisperLiveSession:
         import websockets
@@ -181,4 +234,6 @@ class WhisperLiveStream:
         if hotwords:
             config["hotwords"] = " ".join(hotwords)
         await ws.send(json.dumps(config))
-        return WhisperLiveSession(ws=ws, input_rate=self.input_rate)
+        return WhisperLiveSession(
+            ws=ws, input_rate=self.input_rate, min_final_confidence=self.min_final_confidence
+        )

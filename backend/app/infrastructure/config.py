@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # Taux d'échantillonnage de l'audio entrant (micro). Le front capture en 24 kHz ;
     # WhisperLive attend du 16 kHz ⇒ rééchantillonnage si besoin.
     audio_input_rate: int = 24000
+    # Filtre confiance d'un final : DÉSACTIVÉ par défaut (0.0). La confiance mesure la certitude
+    # de TRANSCRIPTION, pas « silence vs parole » — ce serveur renvoie des probas basses même
+    # sur de la vraie parole (medical, accents), donc filtrer là-dessus supprime de vrais tours.
+    # L'anti-hallucination repose sur `no_speech_prob` + liste d'artefacts + VAD client.
+    # >0 uniquement si on veut re-rejeter les transcriptions très incertaines (rare).
+    stt_final_min_confidence: float = 0.0
 
     # --- TTS : synthèse vocale (v3) ---------------------------------------
     # stub       : WAV de silence valide (dev/test, déterministe).
@@ -80,26 +86,23 @@ class Settings(BaseSettings):
     # Déclenchement spéculatif : l'agent démarre sur la fin de parole détectée
     # (VAD) + le meilleur partiel stable, sans attendre le final validé (~2–3 s).
     speculative_trigger: bool = False
-    vad_silence_ms: int = 700  # silence ⇒ fin de parole (endpointing)
-    vad_min_chunk_ms: int = 200  # durée mini d'un segment avant émission
-    partial_confidence_min: float = 0.6  # seuil de confiance d'un partiel « stable »
     # Barge-in : la reprise de parole annule l'agent + la file TTS en cours.
     barge_in: bool = True
+    # VAD serveur du barge-in : une trame micro est « voisée » si son énergie (RMS PCM16)
+    # dépasse ce seuil ; il faut N trames voisées CONSÉCUTIVES pour confirmer une vraie
+    # reprise de parole. Le micro streame en continu (silence compris) : sans ce filtre, la
+    # moindre trame couperait l'agent dès son premier mot. ~85 ms/trame @ 16 kHz.
+    barge_in_rms_threshold: float = 900.0
+    barge_in_min_voiced_frames: int = 3
     # Backchannel : court accusé joué immédiatement pour masquer la latence.
     backchannel: bool = False
     backchannel_text: str = "D'accord…"
-    # Extraction debounced (hors chemin critique) ; 0 = immédiate.
-    extractor_debounce_ms: int = 300
     # Borne de tokens de génération de l'agent. ⚠️ Les modèles à RAISONNEMENT (gpt-oss…)
     # consomment ce budget en raisonnement caché AVANT d'émettre la réponse parlée : trop bas
     # (ex. 120) → tout part dans le raisonnement → `content` vide → agent muet/garbled. On
     # prévoit donc large ; le modèle s'arrête de lui-même après sa phrase (pas de surcoût de
     # latence). La concision est obtenue par le prompt système (1–2 phrases), pas par ce plafond.
     agent_max_tokens: int = 1024
-    # TTS pipeliné : synthèse par phrase/clause (1er son plus tôt).
-    tts_sentence_chunking: bool = True
-    # Cache du préfixe de prompt stable (système + schéma) côté LLM.
-    prompt_cache: bool = True
 
     # --- Divers ------------------------------------------------------------
     default_language: Literal["en", "fr"] = "fr"
