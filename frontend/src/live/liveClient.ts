@@ -206,6 +206,13 @@ export async function startLive(
         } else if (hangover > 0) {
           ws.send(buf.buffer); // queue de parole + silence final (fin de tour côté serveur)
           hangover--;
+          // Fin de parole détectée par le VAD client : on demande au serveur de finaliser
+          // MAINTENANT (END_OF_AUDIO), sans attendre son propre compteur de silence. Sinon le
+          // serveur (SILENCE_MS) exige plus de silence continu que ce hangover n'en envoie
+          // (~0,85 s) et ne finalise qu'au garde-fou des 30 s → latence énorme.
+          if (hangover === 0 && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "end_turn" }));
+          }
         } else {
           preroll.push(buf.buffer); // silence : on ne garde qu'un court contexte glissant
           if (preroll.length > PREROLL_FRAMES) preroll.shift();
